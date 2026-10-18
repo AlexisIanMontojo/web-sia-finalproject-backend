@@ -1,19 +1,19 @@
+
 # macOS
 .DS_Store
 
-# Environment
+# Environment secrets
 .env
 !.env.example
 
 # Dependencies
-vendor/
-app/vendor/
-composer.lock
+/vendor/
+/app/vendor/
 
-# Cache & Logs
-runtime/*
-!runtime/.htaccess
-!runtime/index.html
+# Cache and logs
+/runtime/*
+!/runtime/.htaccess
+!/runtime/index.html
 *.log
 *.cache
 

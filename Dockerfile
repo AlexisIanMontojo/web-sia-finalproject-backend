@@ -1,27 +1,47 @@
-ARG PHP_VERSION=8.5
- 
+
+ARG PHP_VERSION=8.3
+
 FROM php:${PHP_VERSION}-apache
- 
-# Install PDO MySQL
-RUN docker-php-ext-install pdo pdo_mysql
- 
-# Enable Apache mod_rewrite
-RUN a2enmod rewrite
- 
-# Allow .htaccess overrides
-RUN sed -i '/<Directory \/var\/www\/>/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf
- 
-# Copy app files
-COPY . /var/www/html/
- 
-# Fix permissions
+
+# Install PHP extensions for MySQL
+RUN docker-php-ext-install pdo pdo_mysql mysqli
+
+# Enable Apache modules
+RUN a2enmod rewrite headers
+
+# Set LavaLust's public folder as the web root
+ENV APACHE_DOCUMENT_ROOT=/var/www/html/public
+
+# Configure Apache to serve the public directory
+RUN sed -ri \
+    's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' \
+    /etc/apache2/sites-available/000-default.conf \
+    && printf '\n<Directory /var/www/html/public>\n\
+    AllowOverride All\n\
+    Require all granted\n\
+</Directory>\n' >> /etc/apache2/apache2.conf
+
+# Install Composer
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+
+WORKDIR /var/www/html
+
+# Install PHP dependencies, including PHPMailer
+COPY composer.json composer.lock ./
+
+RUN composer install \
+    --no-dev \
+    --prefer-dist \
+    --no-interaction \
+    --optimize-autoloader
+
+# Copy LavaLust application
+COPY . .
+
+# Set permissions
 RUN chown -R www-data:www-data /var/www/html \
-&& chmod -R 755 /var/www/html
- 
-# Point Apache document root to public/
-ENV APACHE_DOCUMENT_ROOT /var/www/html/public
- 
-RUN sed -i 's|DocumentRoot /var/www/html|DocumentRoot ${APACHE_DOCUMENT_ROOT}|g' /etc/apache2/sites-available/000-default.conf \
-&& sed -i 's|<Directory /var/www/html>|<Directory ${APACHE_DOCUMENT_ROOT}>|g' /etc/apache2/apache2.conf
- 
+    && chmod -R 755 /var/www/html
+
 EXPOSE 80
+
+CMD ["apache2-foreground"]

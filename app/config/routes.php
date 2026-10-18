@@ -44,4 +44,10 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 */
 /** @var object $router **/
 
-$router->get('/', 'Welcome::index');
+// Authentication API
+$router->post('/api/auth/register', 'AuthController::register');
+$router->post('/api/auth/login', 'AuthController::login');
+$router->post(
+    '/api/auth/verify-email',
+    'AuthController::verifyEmail'
+);

@@ -44,7 +44,7 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 | below (see their notes). The API library refuses to start otherwise.
 |
 */
-$config['api_helper_enabled'] = FALSE;
+$config['api_helper_enabled'] = TRUE;
 
 /*
 |--------------------------------------------------------------------------
@@ -78,7 +78,7 @@ $config['refresh_token_expiration'] = 604800;
 | default value: a secret that ships with the framework is public and
 | lets anyone forge valid tokens.
 |
-| Provide it through the environment variable JWT_SECRET.
+| Provide it through the environment variable LAVALUST_JWT_SECRET.
 | It must be at least 32 random characters. Generate one with:
 |
 |   php -r "echo bin2hex(random_bytes(32));"
@@ -87,7 +87,7 @@ $config['refresh_token_expiration'] = 604800;
 | committed or exposed, rotate it. All existing tokens become invalid.
 |
 */
-$config['jwt_secret'] = getenv('JWT_SECRET') ?: '';
+$config['jwt_secret'] = getenv('JWT_SECRET');
 
 /*
 |--------------------------------------------------------------------------
@@ -100,13 +100,13 @@ $config['jwt_secret'] = getenv('JWT_SECRET') ?: '';
 | default value. It is used to hash refresh tokens before they are stored
 | in the database and must be different from jwt_secret.
 |
-| Provide it through the environment variable REFRESH_TOKEN_KEY.
+| Provide it through the environment variable LAVALUST_REFRESH_TOKEN_KEY.
 | It must be at least 32 random characters. Generate one with:
 |
 |   php -r "echo bin2hex(random_bytes(32));"
 |
 */
-$config['refresh_token_key'] = getenv('REFRESH_TOKEN_KEY') ?: '';
+$config['refresh_token_key'] = getenv('REFRESH_TOKEN_KEY');
 
 /*
 |--------------------------------------------------------------------------
@@ -137,6 +137,18 @@ $config['users_table'] = 'users';
 
 /*
 |--------------------------------------------------------------------------
+| Access-Control-Allow-Origin
+|--------------------------------------------------------------------------
+|
+| Access-Control-Allow-Origin - change this to your domain if
+| already deployed. '*' allows any website to call your API from
+| a browser, so set your real domain in production.
+|
+*/
+$config['allow_origin'] = '*';
+
+/*
+|--------------------------------------------------------------------------
 | Refresh Token Table
 |--------------------------------------------------------------------------
 |
@@ -153,7 +165,7 @@ $config['refresh_token_table'] = 'refresh_tokens';
 | application's name or URL.
 |
 */
-$config['jwt_issuer'] = 'your-app';
+$config['jwt_issuer'] = getenv('JWT_ISSUER') ?: 'http://localhost';
 
 /*
 |--------------------------------------------------------------------------
@@ -164,7 +176,7 @@ $config['jwt_issuer'] = 'your-app';
 |
 */
 
-$config['jwt_audience'] = 'your-app-clients';
+$config['jwt_audience'] = getenv('JWT_AUDIENCE') ?: 'http://localhost';
 
 /*
 |--------------------------------------------------------------------------

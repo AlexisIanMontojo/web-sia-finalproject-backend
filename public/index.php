@@ -80,6 +80,13 @@ define('PUBLIC_DIR', $public_folder);
 
 /*
  * ------------------------------------------------------
+ * Load Composer dependencies
+ * ------------------------------------------------------
+ */
+require_once ROOT_DIR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
+
+/*
+ * ------------------------------------------------------
  * Setup done? Then Hurray!
  * ------------------------------------------------------
  */
