@@ -307,99 +307,79 @@ class AuthController extends Controller
 
 
     
-    private function sendVerificationEmail($email, $username, $token)
+        private function sendVerificationEmail($email, $username, $token)
     {
-        $host = getenv('SMTP_HOST');
-        $port = (int) (getenv('SMTP_PORT') ?: 587);
-        $smtpUser = getenv('SMTP_USERNAME');
-        $smtpPassword = getenv('SMTP_PASSWORD');
-        $fromAddress = getenv('MAIL_FROM_ADDRESS');
+        $apiKey = getenv('RESEND_API_KEY');
+        $fromEmail = getenv('RESEND_FROM_EMAIL') ?: 'onboarding@resend.dev';
         $fromName = getenv('MAIL_FROM_NAME') ?: 'Hotel Reservation System';
-        error_log('SMTP_HOST loaded: ' . (getenv('SMTP_HOST') ? 'YES' : 'NO'));
-        error_log('SMTP_USERNAME loaded: ' . (getenv('SMTP_USERNAME') ? 'YES' : 'NO'));
-        error_log('SMTP_PASSWORD loaded: ' . (getenv('SMTP_PASSWORD') ? 'YES' : 'NO'));
-        error_log('MAIL_FROM_ADDRESS loaded: ' . (getenv('MAIL_FROM_ADDRESS') ? 'YES' : 'NO'));
+
         $frontendUrl = rtrim(
             getenv('FRONTEND_URL') ?: 'http://localhost:5173',
             '/'
         );
 
-        if (!$host || !$smtpUser || !$smtpPassword || !$fromAddress) {
-            error_log('Verification email failed: SMTP configuration is incomplete.');
+        if (!$apiKey || !$fromEmail || !$email || !$token) {
+            error_log('Verification email failed: Required configuration is missing.');
             return false;
         }
 
         $verificationUrl = $frontendUrl
             . '/verify-email?token=' . urlencode($token);
 
+        $safeUsername = htmlspecialchars(
+            $username,
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        );
+
+        $safeVerificationUrl = htmlspecialchars(
+            $verificationUrl,
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        );
+
+        $html = '
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto">
+                <h2>Welcome to our Hotel Reservation System!</h2>
+                <p>Hello ' . $safeUsername . ',</p>
+                <p>Thank you for registering. Click below to verify your email.</p>
+                <p>
+                    <a href="' . $safeVerificationUrl . '"
+                    style="background:#2563eb;color:#fff;padding:12px 20px;
+                    text-decoration:none;border-radius:5px;display:inline-block">
+                    Verify My Email
+                    </a>
+                </p>
+                <p>This link expires in 30 minutes and can only be used once.</p>
+                <p>If you did not create this account, you can ignore this email.</p>
+            </div>
+        ';
+
+        $plainText = "Hello {$username}, verify your email using this link: "
+            . $verificationUrl
+            . "\nThis link expires in 30 minutes.";
+
         try {
-            $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
+            $resend = \Resend::client($apiKey);
 
-            $mail->isSMTP();
-            $mail->Host = $host;
-            $mail->SMTPAuth = true;
-            $mail->Username = $smtpUser;
-            $mail->Password = $smtpPassword;
-            $mail->Port = $port;
-            $mail->CharSet = 'UTF-8';
-            $mail->SMTPDebug = 0;
+            $resend->emails->send([
+                'from' => $fromName . ' <' . $fromEmail . '>',
+                'to' => [$email],
+                'subject' => 'Verify Your Hotel Reservation Account',
+                'html' => $html,
+                'text' => $plainText,
+            ]);
 
-            $encryption = strtolower(getenv('SMTP_ENCRYPTION') ?: 'tls');
-
-            if ($encryption === 'ssl') {
-                $mail->SMTPSecure =
-                    \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS;
-            } else {
-                $mail->SMTPSecure =
-                    \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-            }
-
-            $mail->setFrom($fromAddress, $fromName);
-            $mail->addAddress($email, $username);
-
-            $safeUsername = htmlspecialchars(
-                $username,
-                ENT_QUOTES | ENT_SUBSTITUTE,
-                'UTF-8'
-            );
-
-            $mail->isHTML(true);
-            $mail->Subject = 'Verify Your Hotel Reservation Account';
-
-            $mail->Body = '
-                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto">
-                    <h2>Welcome to our Hotel Reservation System!</h2>
-                    <p>Hello ' . $safeUsername . ',</p>
-                    <p>Thank you for registering. Click below to verify your email.</p>
-                    <p>
-                        <a href="' . htmlspecialchars(
-                            $verificationUrl,
-                            ENT_QUOTES | ENT_SUBSTITUTE,
-                            'UTF-8'
-                        ) . '"
-                        style="background:#2563eb;color:#fff;padding:12px 20px;
-                        text-decoration:none;border-radius:5px;display:inline-block">
-                        Verify My Email
-                        </a>
-                    </p>
-                    <p>This link expires in 30 minutes and can only be used once.</p>
-                    <p>If you did not create this account, you can ignore this email.</p>
-                </div>
-            ';
-
-            $mail->AltBody =
-                "Hello {$username}, verify your email using this link: "
-                . $verificationUrl
-                . "\nThis link expires in 30 minutes.";
-
-            $mail->send();
+            error_log('Verification email accepted by Resend.');
             return true;
-        } catch (\Throwable $e) {
-            error_log('Verification email failed: ' . $e->getMessage());
 
-            if (isset($mail) && $mail instanceof \PHPMailer\PHPMailer\PHPMailer) {
-                error_log('PHPMailer details: ' . $mail->ErrorInfo);
-            }
+        } catch (\Throwable $e) {
+            error_log(
+                'Verification email failed: '
+                . get_class($e)
+                . ': '
+                . $e->getMessage()
+            );
 
             return false;
         }
