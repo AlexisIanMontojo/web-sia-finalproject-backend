@@ -323,7 +323,7 @@ class AuthController extends Controller
         // Use the deployed frontend, not localhost.
         $frontendUrl = rtrim(
             getenv('FRONTEND_URL')
-                ?: 'https://web-sia-finalproject-frontend.vercel.app',
+                ?: 'https://web-sia-finalproject-frontend-6cbb.vercel.app',
             '/'
         );
 
