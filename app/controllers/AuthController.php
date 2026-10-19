@@ -318,7 +318,7 @@ class AuthController extends Controller
         $fromName = getenv('MAIL_FROM_NAME') ?: 'Hotel Reservation System';
 
         $frontendUrl = rtrim(
-            getenv('FRONTEND_URL') ?: 'http://localhost:5173',
+            getenv('FRONTEND_URL') ?: 'https://web-sia-finalproject-frontend.vercel.app',
             '/'
         );
 
