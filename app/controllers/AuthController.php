@@ -1,3 +1,4 @@
+
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
@@ -88,13 +89,8 @@ class AuthController extends Controller
         }
 
         try {
-            // Generate a secure, random verification token.
             $token = bin2hex(random_bytes(32));
-
-            // Store only the token hash in the database.
             $tokenHash = hash('sha256', $token);
-
-            // Token expires in 30 minutes.
             $expiresAt = gmdate('Y-m-d H:i:s', time() + 1800);
 
             $tokenId = $this->verificationTokensModel->createToken([
@@ -129,8 +125,8 @@ class AuthController extends Controller
             }
         } catch (\Throwable $e) {
             error_log(
-                'Registration verification error: '
-                . get_class($e) . ': ' . $e->getMessage()
+                'Registration verification error: ' .
+                get_class($e) . ': ' . $e->getMessage()
             );
 
             $this->respond(500, [
@@ -192,7 +188,7 @@ class AuthController extends Controller
             ]);
         }
 
-        if (!(int) $user['is_active']) {
+        if (!(int) ($user['is_active'] ?? 0)) {
             $this->respond(403, [
                 'success' => false,
                 'message' => 'This account is disabled.'
@@ -206,7 +202,7 @@ class AuthController extends Controller
             ]);
         }
 
-        // JWT and refresh-token issuance are not implemented yet.
+        // JWT and refresh-token issuance still need implementation.
         $this->respond(200, [
             'success' => true,
             'message' => 'Credentials verified, but token issuance is not implemented yet.'
@@ -247,10 +243,13 @@ class AuthController extends Controller
             ]);
         }
 
-        if (!empty($verification['used_at'])) {
+        if (
+            !empty($verification['used_at']) ||
+            strtotime($verification['expires_at'] ?? '') <= time()
+        ) {
             $this->respond(400, [
                 'success' => false,
-                'message' => 'This verification link has already been used.'
+                'message' => 'The verification link is expired or has already been used.'
             ]);
         }
 
@@ -297,11 +296,15 @@ class AuthController extends Controller
                 'email_verified' => true
             ]);
         } catch (\Throwable $e) {
-            $this->verificationTokensModel->rollback();
+            try {
+                $this->verificationTokensModel->rollback();
+            } catch (\Throwable $rollbackError) {
+                error_log('Verification rollback failed.');
+            }
 
             error_log(
-                'Email verification error: '
-                . get_class($e) . ': ' . $e->getMessage()
+                'Email verification error: ' .
+                get_class($e) . ': ' . $e->getMessage()
             );
 
             $this->respond(500, [
@@ -317,8 +320,10 @@ class AuthController extends Controller
         $fromEmail = getenv('RESEND_FROM_EMAIL') ?: 'onboarding@resend.dev';
         $fromName = getenv('MAIL_FROM_NAME') ?: 'Hotel Reservation System';
 
+        // Use the deployed frontend, not localhost.
         $frontendUrl = rtrim(
-            getenv('FRONTEND_URL') ?: 'https://web-sia-finalproject-frontend.vercel.app',
+            getenv('FRONTEND_URL')
+                ?: 'https://web-sia-finalproject-frontend.vercel.app',
             '/'
         );
 
@@ -351,7 +356,7 @@ class AuthController extends Controller
                 <p>Thank you for registering. Click below to verify your email.</p>
                 <p>
                     <a href="' . $safeVerificationUrl . '"
-                       style="background:#2563eb;color:#fff;padding:12px 20px;
+                       style="background:#174d38;color:#fff;padding:12px 20px;
                        text-decoration:none;border-radius:5px;display:inline-block">
                         Verify My Email
                     </a>
@@ -374,7 +379,7 @@ class AuthController extends Controller
 
             $resend = \Resend::client($apiKey);
 
-            $result = $resend->emails->send([
+            $resend->emails->send([
                 'from' => $fromName . ' <' . $fromEmail . '>',
                 'to' => [$email],
                 'subject' => 'Verify Your Hotel Reservation Account',
@@ -387,8 +392,8 @@ class AuthController extends Controller
             return true;
         } catch (\Throwable $e) {
             error_log(
-                'Verification email failed: '
-                . get_class($e) . ': ' . $e->getMessage()
+                'Verification email failed: ' .
+                get_class($e) . ': ' . $e->getMessage()
             );
 
             return false;
