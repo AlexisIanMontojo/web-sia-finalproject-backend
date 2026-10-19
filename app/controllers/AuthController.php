@@ -1,3 +1,4 @@
+
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
@@ -9,8 +10,8 @@ class AuthController extends Controller
 
         $this->call->model('UsersModel', 'usersModel');
         $this->call->model(
-        'EmailVerificationTokensModel',
-        'verificationTokensModel'
+            'EmailVerificationTokensModel',
+            'verificationTokensModel'
         );
     }
 
@@ -57,7 +58,7 @@ class AuthController extends Controller
         ) {
             $this->respond(422, [
                 'success' => false,
-                'message' => 'Provide a valid username, email, and password of 8–72 characters.'
+                'message' => 'Provide a valid username, email, and password of 8-72 characters.'
             ]);
         }
 
@@ -88,13 +89,13 @@ class AuthController extends Controller
         }
 
         try {
-            // Generate 32 random bytes, represented as 64 hexadecimal characters.
+            // Generate a secure, random verification token.
             $token = bin2hex(random_bytes(32));
 
-            // Store only the SHA-256 hash in the database.
+            // Store only the token hash in the database.
             $tokenHash = hash('sha256', $token);
 
-            // Expire after 30 minutes. Store the time in UTC.
+            // Token expires in 30 minutes.
             $expiresAt = gmdate('Y-m-d H:i:s', time() + 1800);
 
             $tokenId = $this->verificationTokensModel->createToken([
@@ -109,6 +110,7 @@ class AuthController extends Controller
 
                 $this->respond(500, [
                     'success' => false,
+                    'account_created' => true,
                     'message' => 'The account was created, but its verification token could not be stored.'
                 ]);
             }
@@ -123,14 +125,18 @@ class AuthController extends Controller
                 $this->respond(503, [
                     'success' => false,
                     'account_created' => true,
-                    'message' => 'The account was created, but the verification email could not be sent. Check the SMTP configuration.'
+                    'message' => 'The account was created, but the verification email could not be sent. Check the backend logs.'
                 ]);
             }
         } catch (\Throwable $e) {
-            error_log('Registration verification error: ' . $e->getMessage());
+            error_log(
+                'Registration verification error: '
+                . get_class($e) . ': ' . $e->getMessage()
+            );
 
             $this->respond(500, [
                 'success' => false,
+                'account_created' => true,
                 'message' => 'The account was created, but verification setup failed.'
             ]);
         }
@@ -201,13 +207,13 @@ class AuthController extends Controller
             ]);
         }
 
-        // JWT and refresh-token issuance will be added in the next phase.
+        // JWT and refresh-token issuance are not implemented yet.
         $this->respond(200, [
             'success' => true,
-            'message' => 'Credentials verified. Token issuance is not implemented yet.'
+            'message' => 'Credentials verified, but token issuance is not implemented yet.'
         ]);
     }
-    
+
     public function verifyEmail()
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -231,6 +237,7 @@ class AuthController extends Controller
         }
 
         $tokenHash = hash('sha256', $token);
+
         $verification = $this->verificationTokensModel
             ->findByHash($tokenHash);
 
@@ -249,17 +256,14 @@ class AuthController extends Controller
         }
 
         try {
-            // Start a transaction so token consumption and user verification
-            // succeed or fail together.
             $this->verificationTokensModel->transaction();
 
-            // Atomic check prevents expired tokens and concurrent reuse.
             $statement = $this->db->raw(
                 'UPDATE email_verification_tokens
-                SET used_at = UTC_TIMESTAMP()
-                WHERE id = ?
-                AND used_at IS NULL
-                AND expires_at > UTC_TIMESTAMP()',
+                 SET used_at = UTC_TIMESTAMP()
+                 WHERE id = ?
+                   AND used_at IS NULL
+                   AND expires_at > UTC_TIMESTAMP()',
                 [(int) $verification['id']]
             );
 
@@ -296,7 +300,10 @@ class AuthController extends Controller
         } catch (\Throwable $e) {
             $this->verificationTokensModel->rollback();
 
-            error_log('Email verification error: ' . $e->getMessage());
+            error_log(
+                'Email verification error: '
+                . get_class($e) . ': ' . $e->getMessage()
+            );
 
             $this->respond(500, [
                 'success' => false,
@@ -305,9 +312,7 @@ class AuthController extends Controller
         }
     }
 
-
-    
-        private function sendVerificationEmail($email, $username, $token)
+    private function sendVerificationEmail($email, $username, $token)
     {
         $apiKey = getenv('RESEND_API_KEY');
         $fromEmail = getenv('RESEND_FROM_EMAIL') ?: 'onboarding@resend.dev';
@@ -319,7 +324,9 @@ class AuthController extends Controller
         );
 
         if (!$apiKey || !$fromEmail || !$email || !$token) {
-            error_log('Verification email failed: Required configuration is missing.');
+            error_log(
+                'Verification email failed: Required configuration is missing.'
+            );
             return false;
         }
 
@@ -345,9 +352,9 @@ class AuthController extends Controller
                 <p>Thank you for registering. Click below to verify your email.</p>
                 <p>
                     <a href="' . $safeVerificationUrl . '"
-                    style="background:#2563eb;color:#fff;padding:12px 20px;
-                    text-decoration:none;border-radius:5px;display:inline-block">
-                    Verify My Email
+                       style="background:#2563eb;color:#fff;padding:12px 20px;
+                       text-decoration:none;border-radius:5px;display:inline-block">
+                        Verify My Email
                     </a>
                 </p>
                 <p>This link expires in 30 minutes and can only be used once.</p>
@@ -360,25 +367,29 @@ class AuthController extends Controller
             . "\nThis link expires in 30 minutes.";
 
         try {
+            if (!class_exists('\Resend')) {
+                throw new \RuntimeException(
+                    'Resend SDK is not loaded. Check Composer autoloading.'
+                );
+            }
+
             $resend = \Resend::client($apiKey);
 
-            $resend->emails->send([
+            $result = $resend->emails->send([
                 'from' => $fromName . ' <' . $fromEmail . '>',
                 'to' => [$email],
                 'subject' => 'Verify Your Hotel Reservation Account',
                 'html' => $html,
-                'text' => $plainText,
+                'text' => $plainText
             ]);
 
-            error_log('Verification email accepted by Resend.');
-            return true;
+            error_log('Verification email request accepted by Resend.');
 
+            return true;
         } catch (\Throwable $e) {
             error_log(
                 'Verification email failed: '
-                . get_class($e)
-                . ': '
-                . $e->getMessage()
+                . get_class($e) . ': ' . $e->getMessage()
             );
 
             return false;
