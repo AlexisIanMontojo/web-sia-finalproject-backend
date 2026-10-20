@@ -150,6 +150,7 @@ class AuthController extends Controller
         ]);
     }
 
+
     public function login()
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -195,19 +196,34 @@ class AuthController extends Controller
             ]);
         }
 
-        if (empty($user['email_verified_at'])) {
+        $isAdmin = ($user['role'] ?? '') === 'admin';
+
+        // Customers still require email verification.
+        // Administrators may log in without email verification.
+        if (!$isAdmin && empty($user['email_verified_at'])) {
             $this->respond(403, [
                 'success' => false,
                 'message' => 'Please verify your email before logging in.'
             ]);
         }
 
-        // JWT and refresh-token issuance still need implementation.
+        // Temporary response: JWT and refresh-token issuance
+        // must still be implemented before protected API access works.
         $this->respond(200, [
             'success' => true,
-            'message' => 'Credentials verified, but token issuance is not implemented yet.'
+            'message' => $isAdmin
+                ? 'Admin credentials verified successfully.'
+                : 'Credentials verified successfully.',
+            'user' => [
+                'id' => (int) $user['id'],
+                'username' => $user['username'],
+                'email' => $user['email'],
+                'role' => $user['role'],
+                'email_verified' => !empty($user['email_verified_at'])
+            ]
         ]);
     }
+
 
     public function verifyEmail()
     {
