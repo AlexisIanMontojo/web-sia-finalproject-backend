@@ -51,3 +51,7 @@ $router->post(
     '/api/auth/verify-email',
     'AuthController::verifyEmail'
 );
+
+$router->post('/api/auth/refresh', 'AuthController::refresh');
+$router->post('/api/auth/logout', 'AuthController::logout');
+$router->get('/api/admin/me', 'AdminController::me');

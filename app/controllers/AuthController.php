@@ -8,11 +8,14 @@ class AuthController extends Controller
     {
         parent::__construct();
 
+        require_once APP_DIR . 'libraries/JwtHelper.php';
+
         $this->call->model('UsersModel', 'usersModel');
         $this->call->model(
             'EmailVerificationTokensModel',
             'verificationTokensModel'
         );
+        $this->call->model('RefreshTokensModel', 'refreshTokensModel');
     }
 
     private function respond($status, $data)
@@ -198,8 +201,25 @@ class AuthController extends Controller
 
         $isAdmin = ($user['role'] ?? '') === 'admin';
 
-        // Customers still require email verification.
-        // Administrators may log in without email verification.
+                $isAdmin = ($user['role'] ?? '') === 'admin';
+
+        // Each login page must only accept its own account type.
+        $portal = ($data['portal'] ?? '') === 'admin' ? 'admin' : 'customer';
+
+        if ($portal === 'admin' && !$isAdmin) {
+            $this->respond(403, [
+                'success' => false,
+                'message' => 'This login is for administrators only.'
+            ]);
+        }
+
+        if ($portal === 'customer' && $isAdmin) {
+            $this->respond(403, [
+                'success' => false,
+                'message' => 'Administrators must sign in at the admin login page.'
+            ]);
+        }
+
         if (!$isAdmin && empty($user['email_verified_at'])) {
             $this->respond(403, [
                 'success' => false,
@@ -207,13 +227,33 @@ class AuthController extends Controller
             ]);
         }
 
-        // Temporary response: JWT and refresh-token issuance
-        // must still be implemented before protected API access works.
+        try {
+            $accessToken = JwtHelper::issueAccessToken($user);
+            $refreshToken = $this->issueRefreshToken((int) $user['id']);
+        } catch (\Throwable $e) {
+            error_log('Login session error: ' . get_class($e) . ': ' . $e->getMessage());
+
+            $this->respond(500, [
+                'success' => false,
+                'message' => 'Unable to create a session. Please try again.'
+            ]);
+        }
+
+        if (!$refreshToken) {
+            $this->respond(500, [
+                'success' => false,
+                'message' => 'Unable to create a session. Please try again.'
+            ]);
+        }
+
+        $this->setRefreshCookie($refreshToken);
+
         $this->respond(200, [
             'success' => true,
-            'message' => $isAdmin
-                ? 'Admin credentials verified successfully.'
-                : 'Credentials verified successfully.',
+            'message' => 'Login successful.',
+            'access_token' => $accessToken,
+            'token_type' => 'Bearer',
+            'expires_in' => JwtHelper::ACCESS_TTL,
             'user' => [
                 'id' => (int) $user['id'],
                 'username' => $user['username'],
@@ -414,5 +454,157 @@ class AuthController extends Controller
 
             return false;
         }
+    }
+
+        public function refresh()
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->respond(405, [
+                'success' => false,
+                'message' => 'Method not allowed.'
+            ]);
+        }
+
+        $raw = $this->readRefreshCookie();
+
+        if (!$raw) {
+            $this->clearRefreshCookie();
+            $this->respond(401, [
+                'success' => false,
+                'message' => 'No active session.'
+            ]);
+        }
+
+        $stored = $this->refreshTokensModel->findByHash(hash('sha256', $raw));
+
+        // Revoked tokens are rejected, which also blocks replay of a rotated token.
+        if (
+            !$stored ||
+            !empty($stored['revoked_at']) ||
+            strtotime($stored['expires_at'] . ' UTC') <= time()
+        ) {
+            $this->clearRefreshCookie();
+            $this->respond(401, [
+                'success' => false,
+                'message' => 'Session expired. Please log in again.'
+            ]);
+        }
+
+        $user = $this->usersModel->find_by('id', (int) $stored['user_id']);
+
+        if (!$user || !(int) $user['is_active']) {
+            $this->refreshTokensModel->update((int) $stored['id'], [
+                'revoked_at' => gmdate('Y-m-d H:i:s')
+            ]);
+            $this->clearRefreshCookie();
+            $this->respond(403, [
+                'success' => false,
+                'message' => 'This account is disabled.'
+            ]);
+        }
+
+        // Rotate: revoke the used token and issue a new one.
+        $this->refreshTokensModel->update((int) $stored['id'], [
+            'revoked_at' => gmdate('Y-m-d H:i:s')
+        ]);
+
+        $newRefresh = $this->issueRefreshToken((int) $user['id']);
+
+        if (!$newRefresh) {
+            $this->clearRefreshCookie();
+            $this->respond(500, [
+                'success' => false,
+                'message' => 'Unable to refresh the session.'
+            ]);
+        }
+
+        $this->setRefreshCookie($newRefresh);
+
+        $this->respond(200, [
+            'success' => true,
+            'access_token' => JwtHelper::issueAccessToken($user),
+            'token_type' => 'Bearer',
+            'expires_in' => JwtHelper::ACCESS_TTL,
+            'user' => [
+                'id' => (int) $user['id'],
+                'username' => $user['username'],
+                'email' => $user['email'],
+                'role' => $user['role'],
+                'email_verified' => !empty($user['email_verified_at'])
+            ]
+        ]);
+    }
+
+    public function logout()
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->respond(405, [
+                'success' => false,
+                'message' => 'Method not allowed.'
+            ]);
+        }
+
+        $raw = $this->readRefreshCookie();
+
+        if ($raw) {
+            $stored = $this->refreshTokensModel->findByHash(hash('sha256', $raw));
+
+            if ($stored && empty($stored['revoked_at'])) {
+                $this->refreshTokensModel->update((int) $stored['id'], [
+                    'revoked_at' => gmdate('Y-m-d H:i:s')
+                ]);
+            }
+        }
+
+        $this->clearRefreshCookie();
+
+        $this->respond(200, [
+            'success' => true,
+            'message' => 'Logged out.'
+        ]);
+    }
+
+    private function issueRefreshToken($userId)
+    {
+        $raw = bin2hex(random_bytes(32));
+
+        $inserted = $this->refreshTokensModel->insert([
+            'user_id' => $userId,
+            'token_hash' => hash('sha256', $raw),
+            'jti' => bin2hex(random_bytes(16)),
+            'expires_at' => gmdate('Y-m-d H:i:s', time() + 60 * 60 * 24 * 7),
+            'revoked_at' => null
+        ]);
+
+        return $inserted ? $raw : null;
+    }
+
+    private function setRefreshCookie($rawToken)
+    {
+        setcookie('refresh_token', $rawToken, [
+            'expires' => time() + 60 * 60 * 24 * 7,
+            'path' => '/api/auth',
+            'secure' => true,
+            'httponly' => true,
+            'samesite' => 'Lax'
+        ]);
+    }
+
+    private function clearRefreshCookie()
+    {
+        setcookie('refresh_token', '', [
+            'expires' => time() - 3600,
+            'path' => '/api/auth',
+            'secure' => true,
+            'httponly' => true,
+            'samesite' => 'Lax'
+        ]);
+    }
+
+    private function readRefreshCookie()
+    {
+        $token = $_COOKIE['refresh_token'] ?? '';
+
+        return preg_match('/\A[a-f0-9]{64}\z/', $token) ? $token : null;
     }
 }

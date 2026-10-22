@@ -91,4 +91,12 @@ require_once ROOT_DIR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
  * ------------------------------------------------------
  */
 require_once SYSTEM_DIR . 'kernel/LavaLust.php';
+
+/*
+ * ------------------------------------------------------
+ * Load environment variables from .env (if present)
+ * ------------------------------------------------------
+ */
+$dotenv = Dotenv\Dotenv::createImmutable(ROOT_DIR);
+$dotenv->safeLoad();
 ?>
