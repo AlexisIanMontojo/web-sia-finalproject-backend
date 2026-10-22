@@ -238,16 +238,13 @@ class AuthController extends Controller
         }
 
         if (!$refreshToken) {
-            $reason = $debugReason ?? 'refresh token insert returned no value';
-            error_log('Login session failed: ' . $reason);
+            error_log('Login session failed: refresh token was not created.');
 
             $this->respond(500, [
                 'success' => false,
-                'message' => 'Unable to create a session. Please try again.',
-                'debug' => getenv('APP_DEBUG') === '1' ? $reason : null
+                'message' => 'Unable to create a session. Please try again.'
             ]);
         }
-
         $this->setRefreshCookie($refreshToken);
 
         $this->respond(200, [
@@ -578,13 +575,7 @@ class AuthController extends Controller
             'revoked_at' => null
         ]);
 
-        if (!$inserted) {
-            throw new RuntimeException(
-                'refresh_tokens insert returned ' . var_export($inserted, true)
-            );
-        }
-
-        return $raw;
+        return $inserted ? $raw : null;
     }
 
     private function setRefreshCookie($rawToken)
