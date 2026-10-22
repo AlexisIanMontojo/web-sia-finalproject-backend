@@ -226,22 +226,25 @@ class AuthController extends Controller
             ]);
         }
 
+        $debugReason = null;
+
         try {
             $accessToken = JwtHelper::issueAccessToken($user);
             $refreshToken = $this->issueRefreshToken((int) $user['id']);
         } catch (\Throwable $e) {
-            error_log('Login session error: ' . get_class($e) . ': ' . $e->getMessage());
-
-            $this->respond(500, [
-                'success' => false,
-                'message' => 'Unable to create a session. Please try again.'
-            ]);
+            $debugReason = get_class($e) . ': ' . $e->getMessage();
+            error_log('Login session error: ' . $debugReason);
+            $refreshToken = null;
         }
 
         if (!$refreshToken) {
+            $reason = $debugReason ?? 'refresh token insert returned no value';
+            error_log('Login session failed: ' . $reason);
+
             $this->respond(500, [
                 'success' => false,
-                'message' => 'Unable to create a session. Please try again.'
+                'message' => 'Unable to create a session. Please try again.',
+                'debug' => getenv('APP_DEBUG') === '1' ? $reason : null
             ]);
         }
 
@@ -575,7 +578,13 @@ class AuthController extends Controller
             'revoked_at' => null
         ]);
 
-        return $inserted ? $raw : null;
+        if (!$inserted) {
+            throw new RuntimeException(
+                'refresh_tokens insert returned ' . var_export($inserted, true)
+            );
+        }
+
+        return $raw;
     }
 
     private function setRefreshCookie($rawToken)
