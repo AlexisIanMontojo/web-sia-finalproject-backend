@@ -47,11 +47,35 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 // Authentication API
 $router->post('/api/auth/register', 'AuthController::register');
 $router->post('/api/auth/login', 'AuthController::login');
-$router->post(
-    '/api/auth/verify-email',
-    'AuthController::verifyEmail'
-);
-
+$router->post('/api/auth/verify-email', 'AuthController::verifyEmail');
 $router->post('/api/auth/refresh', 'AuthController::refresh');
 $router->post('/api/auth/logout', 'AuthController::logout');
-$router->get('/api/admin/me', 'AdminController::me');
+$router->get('/api/auth/me', 'AuthController::me');
+
+// Administrator API: every route here passes through the 'admin' middleware
+$router->group(['middleware' => 'admin'], function ($router) {
+
+    $router->get('/api/admin/me', 'AdminController::me');
+
+    $router->get('/api/admin/dashboard/stats', 'DashboardController::stats');
+
+    $router->get('/api/admin/categories', 'CategoriesController::index');
+    $router->post('/api/admin/categories', 'CategoriesController::store');
+    $router->put('/api/admin/categories/{id}', 'CategoriesController::update');
+    $router->delete('/api/admin/categories/{id}', 'CategoriesController::destroy');
+
+    $router->get('/api/admin/rooms', 'RoomsController::index');
+    $router->post('/api/admin/rooms', 'RoomsController::store');
+    $router->put('/api/admin/rooms/{id}', 'RoomsController::update');
+    $router->delete('/api/admin/rooms/{id}', 'RoomsController::destroy');
+
+    $router->get('/api/admin/pricing', 'PricingController::index');
+    $router->post('/api/admin/pricing', 'PricingController::store');
+    $router->put('/api/admin/pricing/{id}', 'PricingController::update');
+    $router->delete('/api/admin/pricing/{id}', 'PricingController::destroy');
+
+    $router->get('/api/admin/customers', 'CustomersController::index');
+    $router->put('/api/admin/customers/{id}', 'CustomersController::update');
+
+});
+
