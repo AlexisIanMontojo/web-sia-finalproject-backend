@@ -42,5 +42,8 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 |
 */
 $config['middlewares'] = array(
-    'admin' => load_class('AdminMiddleware', 'middlewares'),
+    'admin'    => load_class('AdminMiddleware', 'middlewares'),
+    'manager'  => load_class('ManagerMiddleware', 'middlewares'),
+    'staff'    => load_class('StaffMiddleware', 'middlewares'),
+    'customer' => load_class('CustomerMiddleware', 'middlewares'),
 );

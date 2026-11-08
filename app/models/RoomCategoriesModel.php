@@ -36,4 +36,11 @@ class RoomCategoriesModel extends Model
         }
         return false;
     }
+
+        public function findMany(array $ids)
+    {
+        return $this->db->table($this->table)
+            ->in('id', array_map('intval', $ids))
+            ->get_all();
+    }
 }

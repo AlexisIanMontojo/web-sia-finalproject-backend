@@ -77,4 +77,27 @@ class RoomPricingModel extends Model
         }
         return false;
     }
+
+        public function quote($categoryId, $checkIn, $checkOut, $guests, $capacity)
+    {
+        $price = $this->activeOn($categoryId, $checkIn);
+        if (!$price) {
+            return null;
+        }
+
+        $nights     = (int) round((strtotime($checkOut) - strtotime($checkIn)) / 86400);
+        $nightly    = (float) $price['nightly_rate'];
+        $extraGuest = max(0, (int) $guests - (int) $capacity) * (float) $price['extra_guest_charge'] * $nights;
+        $cleaning   = (float) $price['cleaning_fee'];
+        $extras     = round($extraGuest + $cleaning, 2);
+
+        return [
+            'nightly_rate'       => $nightly,
+            'nights'             => $nights,
+            'extra_guest_charges'=> round($extraGuest, 2),
+            'cleaning_fee'       => $cleaning,
+            'extra_charges'      => $extras,
+            'total'              => round($nightly * $nights + $extras, 2),
+        ];
+    }
 }
