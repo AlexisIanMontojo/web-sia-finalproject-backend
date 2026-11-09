@@ -399,7 +399,10 @@ $config['security_headers'] = [
     // ── API ──
     'api_max_body' => 1048576,
     'cors' => [
-        'allowed_origins' => [],
+        'allowed_origins' => [
+            'https://web-sia-finalproject-frontend.vercel.app',
+            'http://localhost:5173',
+        ],
         'credentials'     => false,
         'methods'         => 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
         'headers'         => 'Authorization, Content-Type, X-Requested-With',
