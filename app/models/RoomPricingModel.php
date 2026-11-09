@@ -21,24 +21,17 @@ class RoomPricingModel extends Model
 
     public function allWithCategory()
     {
-        return $this->db->raw(
-            'SELECT p.*, c.name AS category_name
-             FROM room_pricing p
-             INNER JOIN room_categories c ON c.id = p.category_id
-             ORDER BY c.name ASC, p.effective_from DESC'
-        )->fetchAll(PDO::FETCH_ASSOC);
+        return $this->withCategory()
+            ->order_by('room_categories.name', 'ASC')
+            ->order_by('room_pricing.effective_from', 'DESC')
+            ->get_all();
     }
 
     public function findWithCategory($id)
     {
-        $rows = $this->db->raw(
-            'SELECT p.*, c.name AS category_name
-             FROM room_pricing p
-             INNER JOIN room_categories c ON c.id = p.category_id
-             WHERE p.id = ?
-             LIMIT 1',
-            [(int) $id]
-        )->fetchAll(PDO::FETCH_ASSOC);
+        $rows = $this->withCategory()
+            ->where('room_pricing.id', (int) $id)
+            ->get_all();
 
         return $rows[0] ?? null;
     }
@@ -76,5 +69,29 @@ class RoomPricingModel extends Model
             }
         }
         return false;
+    }
+
+        /** Price breakdown for a stay, or null if no price applies on the check-in date. */
+    public function quote($categoryId, $checkIn, $checkOut, $guests, $capacity)
+    {
+        $price = $this->activeOn($categoryId, $checkIn);
+        if (!$price) {
+            return null;
+        }
+
+        $nights     = (int) round((strtotime($checkOut) - strtotime($checkIn)) / 86400);
+        $nightly    = (float) $price['nightly_rate'];
+        $extraGuest = max(0, (int) $guests - (int) $capacity) * (float) $price['extra_guest_charge'] * $nights;
+        $cleaning   = (float) $price['cleaning_fee'];
+        $extras     = round($extraGuest + $cleaning, 2);
+
+        return [
+            'nightly_rate'       => $nightly,
+            'nights'             => $nights,
+            'extra_guest_charges'=> round($extraGuest, 2),
+            'cleaning_fee'       => $cleaning,
+            'extra_charges'      => $extras,
+            'total'              => round($nightly * $nights + $extras, 2),
+        ];
     }
 }

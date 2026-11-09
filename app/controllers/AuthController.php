@@ -129,17 +129,17 @@ class AuthController extends Controller
             $this->api->respond_error('This account is disabled.', 403);
         }
 
-        $isAdmin = $user['role'] === 'admin';
+        $isStaff = $user['role'] !== 'customer';
 
-        if ($portal === 'admin' && !$isAdmin) {
-            $this->api->respond_error('This login is for administrators only.', 403);
+        if ($portal === 'admin' && !$isStaff) {
+            $this->api->respond_error('This login is for staff accounts only.', 403);
         }
 
-        if ($portal === 'customer' && $isAdmin) {
-            $this->api->respond_error('Administrators must sign in at the admin login page.', 403);
+        if ($portal === 'customer' && $isStaff) {
+            $this->api->respond_error('Staff must sign in at the staff login page.', 403);
         }
 
-        if (!$isAdmin && empty($user['email_verified_at'])) {
+        if (!$isStaff && empty($user['email_verified_at'])) {
             $this->api->respond_error('Please verify your email before logging in.', 403);
         }
 
