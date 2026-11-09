@@ -48,7 +48,7 @@ class PricingController extends Controller
             'nightly_rate|Nightly rate'             => 'required|numeric|greater_than[0]',
             'extra_guest_charge|Extra guest charge' => 'required|numeric|greater_than_equal_to[0]',
             'cleaning_fee|Cleaning fee'             => 'required|numeric|greater_than_equal_to[0]',
-            'effective_from|Effective from'         => 'required|pattern[date_ymd]',
+            'effective_from|Effective from'         => 'required',
         ]);
 
         $errors = $isValid ? [] : $this->form_validation->get_errors();
@@ -60,6 +60,10 @@ class PricingController extends Controller
 
         $from  = (string) ($in['effective_from'] ?? '');
         $until = trim((string) ($in['effective_until'] ?? '')) ?: null;
+
+        if (!$this->isDate($from)) {
+            $errors[] = 'Effective from must be a valid date (YYYY-MM-DD).';
+        }
 
         if ($until !== null && (!$this->isDate($until) || $until < $from)) {
             $errors[] = 'End date must be on or after the start date.';
@@ -93,6 +97,9 @@ class PricingController extends Controller
     public function index()
     {
         $this->api->require_method('GET');
+
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
 
         $this->api->respond([
             'success' => true,

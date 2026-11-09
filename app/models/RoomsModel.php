@@ -12,25 +12,26 @@ class RoomsModel extends Model
     ];
     protected $guarded = ['id'];
 
-    private function withCategory()
-    {
-        return $this->db->table($this->table)
-            ->select('rooms.*, room_categories.name AS category_name')
-            ->inner_join('room_categories', 'room_categories.id = rooms.category_id');
-    }
-
     public function allWithCategory()
     {
-        return $this->withCategory()
-            ->order_by('rooms.room_number', 'ASC')
-            ->get_all();
+        return $this->db->raw(
+            'SELECT r.*, c.name AS category_name
+             FROM rooms r
+             INNER JOIN room_categories c ON c.id = r.category_id
+             ORDER BY r.room_number ASC'
+        )->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function findWithCategory($id)
     {
-        $rows = $this->withCategory()
-            ->where('rooms.id', (int) $id)
-            ->get_all();
+        $rows = $this->db->raw(
+            'SELECT r.*, c.name AS category_name
+             FROM rooms r
+             INNER JOIN room_categories c ON c.id = r.category_id
+             WHERE r.id = ?
+             LIMIT 1',
+            [(int) $id]
+        )->fetchAll(PDO::FETCH_ASSOC);
 
         return $rows[0] ?? null;
     }
@@ -70,46 +71,5 @@ class RoomsModel extends Model
         return (int) $this->db->table('reservations')
             ->where('room_id', (int) $roomId)
             ->count();
-    }
-
-    public function findMany(array $ids)
-    {
-        return $this->db->table($this->table)
-            ->in('id', array_map('intval', $ids))
-            ->get_all();
-    }
-
-        private function catalogueSql()
-    {
-        return 'SELECT r.*, c.name AS category_name,
-                       c.description AS category_description,
-                       c.amenities AS category_amenities
-                FROM rooms r
-                INNER JOIN room_categories c ON c.id = r.category_id
-                WHERE r.is_active = 1 AND c.is_active = 1';
-    }
-
-    /** Active rooms in active categories, optionally filtered by room type. */
-    public function catalogue($categoryId = 0)
-    {
-        $sql    = $this->catalogueSql();
-        $params = [];
-
-        if ((int) $categoryId > 0) {
-            $sql .= ' AND r.category_id = ?';
-            $params[] = (int) $categoryId;
-        }
-
-        $sql .= ' ORDER BY c.name ASC, r.room_number ASC';
-
-        return $this->db->raw($sql, $params)->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    public function catalogueItem($id)
-    {
-        $rows = $this->db->raw($this->catalogueSql() . ' AND r.id = ? LIMIT 1', [(int) $id])
-            ->fetchAll(PDO::FETCH_ASSOC);
-
-        return $rows[0] ?? null;
     }
 }

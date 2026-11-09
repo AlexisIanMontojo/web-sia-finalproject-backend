@@ -3,15 +3,7 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class RoomsController extends Controller
 {
-    const STATUSES = ['available', 'maintenance', 'out_of_service'];
-
-    const IMAGE_TYPES = [
-        'image/jpeg' => 'jpg',
-        'image/png'  => 'png',
-        'image/webp' => 'webp',
-    ];
-
-    const IMAGE_MAX_BYTES = 3 * 1024 * 1024; // 3 MB
+    const STATUSES = ['available', 'occupied', 'maintenance', 'out_of_service'];
 
     public function __construct()
     {
@@ -38,7 +30,7 @@ class RoomsController extends Controller
 
     private function validateInput(array $in, $ignoreId = 0)
     {
-        $in['status']    = trim((string) ($in['status'] ?? 'available'));
+        $in['status']    = $in['status'] ?? 'available';
         $in['is_active'] = $in['is_active'] ?? true;
 
         $_POST = $in;
@@ -48,13 +40,10 @@ class RoomsController extends Controller
             'room_number|Room number' => 'required|max_length[20]',
             'category_id|Category'    => 'required|numeric',
             'capacity|Capacity'       => 'required|numeric|greater_than_equal_to[1]|less_than_equal_to[20]',
+            'status|Status'           => 'required|in_list[available,maintenance,out_of_service]',
         ]);
 
         $errors = $isValid ? [] : $this->form_validation->get_errors();
-
-        if (!in_array($in['status'], self::STATUSES, true)) {
-            $errors[] = 'Choose a valid status: ' . implode(', ', self::STATUSES) . '.';
-        }
 
         $number = trim((string) ($in['room_number'] ?? ''));
         if ($number !== '' && $this->rooms->numberTaken($number, $ignoreId)) {
@@ -72,6 +61,11 @@ class RoomsController extends Controller
             $errors[] = 'Floor must be a whole number.';
         }
 
+        $image = trim((string) ($in['image_url'] ?? ''));
+        if ($image !== '' && !filter_var($image, FILTER_VALIDATE_URL)) {
+            $errors[] = 'Enter a valid web address.';
+        }
+
         if ($errors) {
             $this->api->respond([
                 'success' => false,
@@ -87,61 +81,18 @@ class RoomsController extends Controller
             'floor_number' => $floor === '' ? null : (int) $floor,
             'capacity'     => (int) $in['capacity'],
             'status'       => $in['status'],
-            'image_url'    => trim((string) ($in['image_url'] ?? '')) ?: null,
+            'image_url'    => $image ?: null,
             'is_active'    => filter_var($in['is_active'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0,
         ];
-    }
-
-    /**
-     * Saves an uploaded image and returns its public path.
-     * Accepts multipart/form-data with a field named "image".
-     */
-    public function upload()
-    {
-        $this->api->require_method('POST');
-
-        if (empty($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK) {
-            $this->api->respond_error('Choose an image to upload.', 422);
-        }
-
-        $file = $_FILES['image'];
-
-        if ($file['size'] > self::IMAGE_MAX_BYTES) {
-            $this->api->respond_error('The image must be 3 MB or smaller.', 422);
-        }
-
-        // Check the real file contents, not the name or the browser's type.
-        $finfo    = new finfo(FILEINFO_MIME_TYPE);
-        $mime     = $finfo->file($file['tmp_name']);
-        $extension = self::IMAGE_TYPES[$mime] ?? null;
-
-        if (!$extension || !getimagesize($file['tmp_name'])) {
-            $this->api->respond_error('Upload a JPG, PNG, or WebP image.', 422);
-        }
-
-        $dir = FCPATH . 'uploads' . DIRECTORY_SEPARATOR . 'rooms';
-        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
-            error_log('Could not create the room image folder: ' . $dir);
-            $this->api->respond_error('Image storage is not available.', 500);
-        }
-
-        $name = bin2hex(random_bytes(12)) . '.' . $extension;
-
-        if (!move_uploaded_file($file['tmp_name'], $dir . DIRECTORY_SEPARATOR . $name)) {
-            error_log('Failed to move uploaded room image to ' . $dir);
-            $this->api->respond_error('The image could not be saved. Try again.', 500);
-        }
-
-        $this->api->respond([
-            'success'   => true,
-            'message'   => 'Image uploaded.',
-            'image_url' => '/uploads/rooms/' . $name,
-        ], 201);
     }
 
     public function index()
     {
         $this->api->require_method('GET');
+
+        // Never let the browser or a proxy reuse an old list.
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
 
         $this->api->respond([
             'success' => true,
@@ -187,6 +138,7 @@ class RoomsController extends Controller
             $this->api->respond_error('Room not found.', 404);
         }
 
+        // reservations.room_id is ON DELETE RESTRICT, so check first.
         $bookings = $this->rooms->reservationCount($id);
         if ($bookings > 0) {
             $this->api->respond_error(
