@@ -8,7 +8,7 @@ class AdminHotelController extends Controller
         parent::__construct();
         $this->call->model('HotelInfoModel', 'hotel');
     }
-
+    // start
     private function shape(array $h)
     {
         return [
@@ -24,7 +24,6 @@ class AdminHotelController extends Controller
             'longitude'      => $h['longitude'] === null ? null : (float) $h['longitude'],
         ];
     }
-
     /** Accepts a list as an array or as text with one item per line. */
     private function lines($value)
     {
