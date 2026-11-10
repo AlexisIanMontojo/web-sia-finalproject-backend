@@ -51,6 +51,56 @@ class RoomPricingModel extends Model
         return null;
     }
 
+    /** Calculate a stay total using the active price for each booked night. */
+    public function quote($categoryId, $checkIn, $checkOut, $guests, $capacity)
+    {
+        $start = \DateTimeImmutable::createFromFormat('!Y-m-d', $checkIn);
+        $end   = \DateTimeImmutable::createFromFormat('!Y-m-d', $checkOut);
+
+        if (
+            !$start || !$end
+            || $start->format('Y-m-d') !== $checkIn
+            || $end->format('Y-m-d') !== $checkOut
+            || $end <= $start
+        ) {
+            return null;
+        }
+
+        $nights = 0;
+        $nightlyTotal = 0.0;
+        $extraGuestCharges = 0.0;
+        $cleaningFee = null;
+        $extraGuests = max(0, (int) $guests - max(1, (int) $capacity));
+
+        for ($night = $start; $night < $end; $night = $night->modify('+1 day')) {
+            $price = $this->activeOn($categoryId, $night->format('Y-m-d'));
+            if (!$price) {
+                return null;
+            }
+
+            $nightlyTotal += (float) $price['nightly_rate'];
+            $extraGuestCharges += $extraGuests * (float) $price['extra_guest_charge'];
+            if ($cleaningFee === null) {
+                $cleaningFee = (float) $price['cleaning_fee'];
+            }
+            $nights++;
+        }
+
+        $nightlyRate = round($nightlyTotal / $nights, 2);
+        $extraGuestCharges = round($extraGuestCharges, 2);
+        $cleaningFee = round($cleaningFee ?? 0, 2);
+        $extraCharges = round($extraGuestCharges + $cleaningFee, 2);
+
+        return [
+            'nightly_rate'        => $nightlyRate,
+            'nights'              => $nights,
+            'extra_guest_charges' => $extraGuestCharges,
+            'cleaning_fee'        => $cleaningFee,
+            'extra_charges'       => $extraCharges,
+            'total'               => round($nightlyTotal + $extraCharges, 2),
+        ];
+    }
+
     /** True if another active price for this category overlaps the range. */
     public function overlaps($categoryId, $from, $until, $ignoreId = 0)
     {
