@@ -7,7 +7,8 @@ FROM php:${PHP_VERSION}-apache
 RUN apt-get update && apt-get install -y \
     unzip \
     libzip-dev \
-    && docker-php-ext-install zip pdo pdo_mysql mysqli \
+    libcurl4-openssl-dev \
+    && docker-php-ext-install zip curl pdo pdo_mysql mysqli \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

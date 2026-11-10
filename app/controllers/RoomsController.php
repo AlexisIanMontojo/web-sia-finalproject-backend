@@ -7,6 +7,70 @@ class RoomsController extends Controller
     const UPLOAD_DIR = 'public/uploads/rooms/';
     const MAX_UPLOAD_BYTES = 3145728; // 3 MB
 
+    private function uploadToCloudinary(array $file, $mime)
+    {
+        $cloudName = trim((string) getenv('CLOUDINARY_CLOUD_NAME'));
+        $apiKey    = trim((string) getenv('CLOUDINARY_API_KEY'));
+        $apiSecret = trim((string) getenv('CLOUDINARY_API_SECRET'));
+
+        if ($cloudName === '' || $apiKey === '' || $apiSecret === '') {
+            if ($cloudName !== '' || $apiKey !== '' || $apiSecret !== '') {
+                error_log('Cloudinary image storage is only partially configured.');
+                $this->api->respond_error('Image storage is not configured correctly.', 503);
+            }
+
+            if ((getenv('APP_ENV') ?: 'development') === 'production') {
+                $this->api->respond_error('Image storage is not configured. Configure Cloudinary in the backend environment.', 503);
+            }
+
+            return null;
+        }
+
+        if (!function_exists('curl_init')) {
+            error_log('Cloudinary image upload requires the PHP cURL extension.');
+            $this->api->respond_error('Image storage is unavailable.', 503);
+        }
+
+        $timestamp = time();
+        $folder = 'hotel-reservation/rooms';
+        $signature = sha1('folder=' . $folder . '&timestamp=' . $timestamp . $apiSecret);
+        $url = 'https://api.cloudinary.com/v1_1/' . rawurlencode($cloudName) . '/image/upload';
+
+        $curl = curl_init($url);
+        curl_setopt_array($curl, [
+            CURLOPT_POST           => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_POSTFIELDS     => [
+                'file'      => new CURLFile($file['tmp_name'], $mime, basename($file['name'])),
+                'api_key'   => $apiKey,
+                'timestamp' => $timestamp,
+                'folder'    => $folder,
+                'signature' => $signature,
+            ],
+        ]);
+
+        $response = curl_exec($curl);
+        $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+        $curlError = curl_error($curl);
+        curl_close($curl);
+
+        if ($response === false || $status < 200 || $status >= 300) {
+            error_log('Cloudinary image upload failed (HTTP ' . $status . '): ' . ($curlError ?: 'provider rejected request'));
+            $this->api->respond_error('The image could not be saved to image storage.', 502);
+        }
+
+        $result = json_decode($response, true);
+        $imageUrl = $result['secure_url'] ?? null;
+        if (!is_string($imageUrl) || !filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+            error_log('Cloudinary image upload returned an invalid response.');
+            $this->api->respond_error('Image storage returned an invalid response.', 502);
+        }
+
+        return $imageUrl;
+    }
+
     public function __construct()
     {
         parent::__construct();
@@ -124,6 +188,15 @@ class RoomsController extends Controller
 
         if (!isset($allowed[$mime])) {
             $this->api->respond_error('Only JPG, PNG, or WebP images are allowed.', 422);
+        }
+
+        $cloudinaryUrl = $this->uploadToCloudinary($file, $mime);
+        if ($cloudinaryUrl !== null) {
+            $this->api->respond([
+                'success'   => true,
+                'message'   => 'Image uploaded.',
+                'image_url' => $cloudinaryUrl,
+            ], 201);
         }
 
         $dir = ROOT_DIR . self::UPLOAD_DIR;
