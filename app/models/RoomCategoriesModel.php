@@ -37,10 +37,19 @@ class RoomCategoriesModel extends Model
         return false;
     }
 
+    /** Categories by id list. Returns a plain list. */
     public function findMany(array $ids)
     {
-        return $this->db->table($this->table)
-            ->in('id', array_map('intval', $ids))
-            ->get_all();
+        $ids = array_values(array_unique(array_map('intval', $ids)));
+        if (empty($ids)) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+        return $this->db->raw(
+            "SELECT * FROM room_categories WHERE id IN ({$placeholders})",
+            $ids
+        )->fetchAll(PDO::FETCH_ASSOC);
     }
 }

@@ -72,4 +72,36 @@ class RoomsModel extends Model
             ->where('room_id', (int) $roomId)
             ->count();
     }
+
+        /** Active rooms in one category, with the category name. Used by the public catalogue. */
+    public function catalogue($categoryId)
+    {
+        return $this->db->raw(
+            'SELECT r.*, c.name AS category_name, c.max_occupancy
+             FROM rooms r
+             INNER JOIN room_categories c ON c.id = r.category_id
+             WHERE r.category_id = ? AND r.is_active = 1
+             ORDER BY r.room_number ASC',
+            [(int) $categoryId]
+        )->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+        /** Rooms by id list, with category name. Returns a plain list. */
+    public function findMany(array $ids)
+    {
+        $ids = array_values(array_unique(array_map('intval', $ids)));
+        if (empty($ids)) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+        return $this->db->raw(
+            "SELECT r.*, c.name AS category_name
+             FROM rooms r
+             INNER JOIN room_categories c ON c.id = r.category_id
+             WHERE r.id IN ({$placeholders})",
+            $ids
+        )->fetchAll(PDO::FETCH_ASSOC);
+    }
 }

@@ -3,7 +3,9 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class RoomsController extends Controller
 {
-    const STATUSES = ['available', 'occupied', 'maintenance', 'out_of_service'];
+    const STATUSES = ['available', 'maintenance', 'out_of_service'];
+    const UPLOAD_DIR = 'public/uploads/rooms/';
+    const MAX_UPLOAD_BYTES = 3145728; // 3 MB
 
     public function __construct()
     {
@@ -61,8 +63,10 @@ class RoomsController extends Controller
             $errors[] = 'Floor must be a whole number.';
         }
 
+        // Accept either an image uploaded through this app or a full web address.
         $image = trim((string) ($in['image_url'] ?? ''));
-        if ($image !== '' && !filter_var($image, FILTER_VALIDATE_URL)) {
+        $isLocalUpload = (bool) preg_match('#^/uploads/rooms/[a-f0-9]{24}\.(jpg|png|webp)$#', $image);
+        if ($image !== '' && !$isLocalUpload && !filter_var($image, FILTER_VALIDATE_URL)) {
             $errors[] = 'Enter a valid web address.';
         }
 
@@ -90,7 +94,6 @@ class RoomsController extends Controller
     {
         $this->api->require_method('GET');
 
-        // Never let the browser or a proxy reuse an old list.
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
         header('Pragma: no-cache');
 
@@ -98,6 +101,49 @@ class RoomsController extends Controller
             'success' => true,
             'data'    => array_map([$this, 'shape'], $this->rooms->allWithCategory()),
         ]);
+    }
+
+    public function upload()
+    {
+        $this->api->require_method('POST');
+
+        if (empty($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK) {
+            $this->api->respond_error('Choose an image to upload.', 422);
+        }
+
+        $file = $_FILES['image'];
+
+        if ($file['size'] > self::MAX_UPLOAD_BYTES) {
+            $this->api->respond_error('The image must be 3 MB or smaller.', 422);
+        }
+
+        // Check the real file content, not the name or the browser's claim.
+        $finfo   = new finfo(FILEINFO_MIME_TYPE);
+        $mime    = $finfo->file($file['tmp_name']);
+        $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
+
+        if (!isset($allowed[$mime])) {
+            $this->api->respond_error('Only JPG, PNG, or WebP images are allowed.', 422);
+        }
+
+        $dir = ROOT_DIR . self::UPLOAD_DIR;
+        if (!is_dir($dir) && !mkdir($dir, 0775, true)) {
+            error_log('Could not create upload directory: ' . $dir);
+            $this->api->respond_error('The upload folder could not be created.', 500);
+        }
+
+        $name = bin2hex(random_bytes(12)) . '.' . $allowed[$mime];
+
+        if (!move_uploaded_file($file['tmp_name'], $dir . $name)) {
+            error_log('Could not move uploaded file to: ' . $dir . $name);
+            $this->api->respond_error('The image could not be saved.', 500);
+        }
+
+        $this->api->respond([
+            'success'   => true,
+            'message'   => 'Image uploaded.',
+            'image_url' => '/uploads/rooms/' . $name,
+        ], 201);
     }
 
     public function store()
@@ -138,7 +184,6 @@ class RoomsController extends Controller
             $this->api->respond_error('Room not found.', 404);
         }
 
-        // reservations.room_id is ON DELETE RESTRICT, so check first.
         $bookings = $this->rooms->reservationCount($id);
         if ($bookings > 0) {
             $this->api->respond_error(
