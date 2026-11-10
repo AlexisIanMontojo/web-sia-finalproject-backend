@@ -165,7 +165,7 @@ $config['refresh_token_table'] = 'refresh_tokens';
 | application's name or URL.
 |
 */
-$config['jwt_issuer'] = getenv('JWT_ISSUER') ?: 'http://localhost';
+$config['jwt_issuer'] = getenv('JWT_ISSUER') ?: 'https://web-sia-finalproject-backend.onrender.com';
 
 /*
 |--------------------------------------------------------------------------
@@ -176,7 +176,7 @@ $config['jwt_issuer'] = getenv('JWT_ISSUER') ?: 'http://localhost';
 |
 */
 
-$config['jwt_audience'] = getenv('JWT_AUDIENCE') ?: 'http://localhost';
+$config['jwt_audience'] = getenv('JWT_AUDIENCE') ?: 'https://web-sia-finalproject-frontend.vercel.app';
 
 /*
 |--------------------------------------------------------------------------
