@@ -73,16 +73,24 @@ class RoomsModel extends Model
             ->count();
     }
 
-        /** Active rooms in one category, with the category name. Used by the public catalogue. */
+    /** Active rooms, optionally filtered by category, with the category name. */
     public function catalogue($categoryId)
     {
+        $categoryId = (int) $categoryId;
+        $categoryFilter = $categoryId > 0 ? ' AND r.category_id = ?' : '';
+        $params = $categoryId > 0 ? [$categoryId] : [];
+
         return $this->db->raw(
-            'SELECT r.*, c.name AS category_name, c.max_occupancy
+            'SELECT r.*,
+                    c.name AS category_name,
+                    c.description AS category_description,
+                    c.amenities AS category_amenities,
+                    c.max_occupancy
              FROM rooms r
              INNER JOIN room_categories c ON c.id = r.category_id
-             WHERE r.category_id = ? AND r.is_active = 1
+             WHERE r.is_active = 1' . $categoryFilter . '
              ORDER BY r.room_number ASC',
-            [(int) $categoryId]
+            $params
         )->fetchAll(PDO::FETCH_ASSOC);
     }
 
