@@ -94,6 +94,25 @@ class RoomsModel extends Model
         )->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    /** One active room with the category fields needed by the booking page. */
+    public function catalogueItem($roomId)
+    {
+        $rows = $this->db->raw(
+            'SELECT r.*,
+                    c.name AS category_name,
+                    c.description AS category_description,
+                    c.amenities AS category_amenities,
+                    c.max_occupancy
+             FROM rooms r
+             INNER JOIN room_categories c ON c.id = r.category_id
+             WHERE r.id = ? AND r.is_active = 1
+             LIMIT 1',
+            [(int) $roomId]
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        return $rows[0] ?? null;
+    }
+
         /** Rooms by id list, with category name. Returns a plain list. */
     public function findMany(array $ids)
     {
