@@ -43,6 +43,11 @@ class XenditWebhookController extends Controller
             $this->api->respond_error('Could not verify the invoice with the provider.', 502);
         }
 
+        if ((string) ($invoice['external_id'] ?? '') !== $externalId) {
+            error_log("Xendit webhook invoice mismatch for {$externalId}.");
+            $this->api->respond(['success' => true, 'message' => 'Ignored: invoice mismatch.']);
+        }
+
         if (abs((float) ($invoice['amount'] ?? 0) - (float) $row['amount']) > 0.01) {
             error_log("Xendit webhook amount mismatch for {$externalId}.");
             $this->api->respond(['success' => true, 'message' => 'Ignored: amount mismatch.']);

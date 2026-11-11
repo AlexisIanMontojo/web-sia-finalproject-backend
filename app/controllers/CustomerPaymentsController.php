@@ -29,7 +29,10 @@ class CustomerPaymentsController extends Controller
 
     private function frontendUrl()
     {
-        return rtrim($this->payments->env('FRONTEND_URL', 'http://localhost:5173'), '/');
+        return rtrim(
+            $this->payments->env('FRONTEND_URL', 'https://web-sia-finalproject-frontend.vercel.app'),
+            '/'
+        );
     }
 
     private function shapePayment(array $p)
@@ -55,6 +58,10 @@ class CustomerPaymentsController extends Controller
             $this->api->respond_error('Reservation not found.', 404);
         }
 
+        $externalId = (string) ($_GET['external_id'] ?? '');
+        if ($externalId !== '') {
+            $this->payments->syncPendingInvoices((int) $r['id'], $externalId);
+        }
         $total = (float) $r['total_amount'];
         $paid  = $this->payments->paidTotal((int) $r['id']);
         $open  = in_array($r['status'], ['pending', 'confirmed'], true);
@@ -111,6 +118,8 @@ class CustomerPaymentsController extends Controller
         $user       = $this->usersModel->find($userId);
         $externalId = 'DP-' . (int) $r['id'] . '-' . bin2hex(random_bytes(6));
         $front      = $this->frontendUrl();
+        $returnUrl  = $front . '/payment-return?reservation_id=' . (int) $r['id']
+            . '&external_id=' . rawurlencode($externalId);
 
         [$status, $body] = $this->payments->createInvoice([
             'external_id'          => $externalId,
@@ -119,8 +128,8 @@ class CustomerPaymentsController extends Controller
             'description'          => "Downpayment for reservation {$r['reservation_code']}",
             'currency'             => 'PHP',
             'invoice_duration'     => 86400,
-            'success_redirect_url' => $front . '/my-reservations?paid=' . urlencode($externalId),
-            'failure_redirect_url' => $front . '/my-reservations?paid=failed',
+            'success_redirect_url' => $returnUrl . '&result=success',
+            'failure_redirect_url' => $returnUrl . '&result=failed',
         ]);
 
         if ($status < 200 || $status >= 300 || empty($body['invoice_url'])) {

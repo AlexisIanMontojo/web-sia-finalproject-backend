@@ -49,7 +49,72 @@ class ReservationPaymentsModel extends Model
         return (float) ($row['total'] ?? 0);
     }
 
-    /** Sends a request to Xendit. Returns [HTTP status, decoded body]. */
+    public function syncPendingInvoices($reservationId, $externalId = '')
+    {
+        foreach ($this->forReservation($reservationId) as $payment) {
+            if (
+                $payment['provider'] !== 'xendit'
+                || $payment['status'] !== 'pending'
+                || empty($payment['invoice_id'])
+                || ($externalId !== '' && $payment['external_id'] !== $externalId)
+            ) {
+                continue;
+            }
+
+            [$code, $invoice] = $this->fetchInvoice($payment['invoice_id']);
+            if ($code !== 200) {
+                error_log('Could not verify pending Xendit payment ' . $payment['external_id'] . '.');
+                continue;
+            }
+
+            if (
+                (string) ($invoice['external_id'] ?? '') !== (string) $payment['external_id']
+                || abs((float) ($invoice['amount'] ?? 0) - (float) $payment['amount']) > 0.01
+            ) {
+                error_log('Xendit invoice mismatch for ' . $payment['external_id'] . '.');
+                continue;
+            }
+
+            $status = strtoupper((string) ($invoice['status'] ?? ''));
+            if ($status === 'PAID' || $status === 'SETTLED') {
+                $paidAt = $invoice['paid_at'] ?? null;
+                $paidAtTimestamp = $paidAt ? strtotime($paidAt) : false;
+                $this->update((int) $payment['id'], [
+                    'status'  => 'paid',
+                    'paid_at' => $paidAtTimestamp
+                        ? date('Y-m-d H:i:s', $paidAtTimestamp)
+                        : date('Y-m-d H:i:s'),
+                ]);
+            } elseif ($status === 'EXPIRED') {
+                $this->update((int) $payment['id'], ['status' => 'expired']);
+            }
+        }
+    }
+
+    public function allForAdmin($status = '')
+    {
+        $sql = 'SELECT p.id, p.reservation_id, p.provider, p.kind, p.external_id,
+                       p.amount, p.status, p.paid_at, p.created_at,
+                       r.reservation_code, r.total_amount, r.status AS reservation_status,
+                       r.check_in_date, r.check_out_date, rm.room_number,
+                       c.name AS category_name, u.username AS guest_name, u.email AS guest_email
+                FROM reservation_payments p
+                INNER JOIN reservations r ON r.id = p.reservation_id
+                INNER JOIN rooms rm ON rm.id = r.room_id
+                INNER JOIN room_categories c ON c.id = rm.category_id
+                INNER JOIN users u ON u.id = r.user_id';
+        $params = [];
+
+        if ($status !== '') {
+            $sql .= ' WHERE p.status = ?';
+            $params[] = $status;
+        }
+
+        $sql .= ' ORDER BY p.created_at DESC, p.id DESC';
+
+        return $this->db->raw($sql, $params)->fetchAll(PDO::FETCH_ASSOC);
+    }
+
     public function xenditRequest($method, $path, $body = null)
     {
         $key = $this->env('XENDIT_SECRET_KEY');
