@@ -97,7 +97,7 @@ class CustomerPaymentsController extends Controller
         $amountType = (string) ($in['amount_type'] ?? 'downpayment');
         $method = (string) ($in['method'] ?? 'xendit');
 
-        if (!in_array($amountType, ['downpayment', 'full'], true)) {
+        if (!in_array($amountType, ['downpayment', 'full', 'balance'], true)) {
             $this->api->respond_error('Choose a valid payment amount.', 422);
         }
         if (!in_array($method, ['xendit', 'cash'], true)) {
@@ -160,6 +160,12 @@ class CustomerPaymentsController extends Controller
             }
             $amount = $this->depositFor((float) $reservation['total_amount']);
             $kind = 'downpayment';
+        } elseif ($amountType === 'balance') {
+            if ($paid <= 0) {
+                return ['error' => 'A downpayment must be recorded before paying the remaining balance.', 'status' => 409];
+            }
+            $amount = $balance;
+            $kind = 'balance';
         } else {
             $amount = $balance;
             $kind = $paid > 0 ? 'balance' : 'full';
