@@ -66,7 +66,7 @@ class CustomerPaymentsController extends Controller
         }
         $total = (float) $r['total_amount'];
         $paid  = $this->payments->paidReservationTotal((int) $r['id']);
-        $open  = in_array($r['status'], ['pending', 'confirmed'], true);
+        $open  = in_array($r['status'], ['pending', 'confirmed', 'checked_in', 'checked_out'], true);
 
         $this->api->respond([
             'success'        => true,
@@ -116,8 +116,8 @@ class CustomerPaymentsController extends Controller
             $this->api->respond_error('Reservation not found.', 404);
         }
 
-        if (!in_array($r['status'], ['pending', 'confirmed'], true)) {
-            $this->api->respond_error('Payment is only available for a pending or confirmed booking.', 409);
+        if (!in_array($r['status'], ['pending', 'confirmed', 'checked_in', 'checked_out'], true)) {
+            $this->api->respond_error('Payment is unavailable for cancelled or rejected reservations.', 409);
         }
 
         if (!$this->payments->acquireReservationPaymentLock((int) $r['id'])) {
