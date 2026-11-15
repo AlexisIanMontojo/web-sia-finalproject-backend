@@ -103,7 +103,7 @@ class AdminServiceRequestsController extends Controller
         }
 
         if ($this->payments->hasPendingServicePaymentForService((int) $id)) {
-            $this->api->respond_error('This service is included in a pending Xendit invoice.', 409);
+            $this->api->respond_error('This service is included in a pending payment.', 409);
         }
 
         $this->requests->update((int) $id, [
