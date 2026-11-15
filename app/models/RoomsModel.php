@@ -66,6 +66,27 @@ class RoomsModel extends Model
             ->count();
     }
 
+    public function dashboardStatusCounts()
+    {
+        return $this->db->raw(
+            'SELECT status, SUM(is_active = 1) AS active_total
+             FROM rooms
+             GROUP BY status'
+        )->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function dashboardCategoryCounts()
+    {
+        return $this->db->raw(
+            'SELECT c.name, COUNT(r.id) AS total
+             FROM room_categories c
+             LEFT JOIN rooms r ON r.category_id = c.id
+             WHERE c.is_active = 1
+             GROUP BY c.id, c.name
+             ORDER BY c.name'
+        )->fetchAll(PDO::FETCH_ASSOC);
+    }
+
     public function reservationCount($roomId)
     {
         return (int) $this->db->table('reservations')

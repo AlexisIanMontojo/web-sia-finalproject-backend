@@ -98,6 +98,7 @@ $router->group(['middleware' => 'customer'], function ($router) {
 
     $router->get('/api/customer/reservations/{id}/payments', 'CustomerPaymentsController::index');
     $router->post('/api/customer/reservations/{id}/downpayment', 'CustomerPaymentsController::downpayment');
+    $router->post('/api/customer/reservations/{id}/service-payment', 'CustomerPaymentsController::servicePayment');
 });
 
 // Staff (front desk): admin, manager, and staff
@@ -132,6 +133,7 @@ $router->group(['middleware' => 'staff'], function ($router) {
 // Manager: admin and manager
 $router->group(['middleware' => 'manager'], function ($router) {
     $router->get('/api/admin/dashboard/stats', 'DashboardController::stats');
+    $router->get('/api/admin/reports', 'AdminReportsController::index');
     $router->get('/api/admin/payments', 'AdminPaymentsController::index');
 
     $router->get('/api/admin/categories', 'CategoriesController::index');

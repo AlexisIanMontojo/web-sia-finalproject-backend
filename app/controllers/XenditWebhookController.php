@@ -56,10 +56,12 @@ class XenditWebhookController extends Controller
         $status = strtoupper((string) ($invoice['status'] ?? ''));
 
         if ($status === 'PAID' || $status === 'SETTLED') {
-            $this->payments->update((int) $row['id'], [
-                'status'  => 'paid',
-                'paid_at' => date('Y-m-d H:i:s'),
-            ]);
+            try {
+                $this->payments->recordPaid($row, date('Y-m-d H:i:s'));
+            } catch (\Throwable $e) {
+                error_log('Xendit payment recording failed: ' . get_class($e) . ': ' . $e->getMessage());
+                $this->api->respond_error('The verified payment could not be recorded.', 500);
+            }
         } elseif ($status === 'EXPIRED') {
             $this->payments->update((int) $row['id'], ['status' => 'expired']);
         }

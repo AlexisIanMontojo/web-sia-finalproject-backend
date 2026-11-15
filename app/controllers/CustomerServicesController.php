@@ -21,6 +21,7 @@ class CustomerServicesController extends Controller
         parent::__construct();
         $this->call->model('ServiceCatalogModel', 'services');
         $this->call->model('ReservationServicesModel', 'requests');
+        $this->call->model('ReservationPaymentsModel', 'payments');
         $this->call->model('ReservationsModel', 'reservations');
     }
 
@@ -103,11 +104,26 @@ class CustomerServicesController extends Controller
         }
 
         $this->api->respond([
-            'success' => true,
-            'open'    => $this->isOpenStay($reservation),
-            'total'   => round($total, 2),
-            'data'    => array_map([$this, 'shapeRequest'], $rows),
+            'success'                  => true,
+            'open'                     => $this->isOpenStay($reservation),
+            'total'                    => round($total, 2),
+            'pending_service_payment'  => $this->shapePendingPayment(
+                $this->payments->pendingServicePayment((int) $reservation['id'])
+            ),
+            'data'                     => array_map([$this, 'shapeRequest'], $rows),
         ]);
+    }
+
+    private function shapePendingPayment($payment)
+    {
+        if (!$payment || empty($payment['invoice_url'])) {
+            return null;
+        }
+
+        return [
+            'amount'      => (float) $payment['amount'],
+            'invoice_url' => $payment['invoice_url'],
+        ];
     }
 
     /** POST /api/customer/reservations/{id}/services */

@@ -10,6 +10,7 @@ class CustomerPaymentsController extends Controller
         parent::__construct();
         $this->call->model('ReservationsModel', 'reservations');
         $this->call->model('ReservationPaymentsModel', 'payments');
+        $this->call->model('ReservationServicesModel', 'serviceRequests');
         $this->call->model('UsersModel', 'usersModel');
     }
 
@@ -63,7 +64,7 @@ class CustomerPaymentsController extends Controller
             $this->payments->syncPendingInvoices((int) $r['id'], $externalId);
         }
         $total = (float) $r['total_amount'];
-        $paid  = $this->payments->paidTotal((int) $r['id']);
+        $paid  = $this->payments->paidReservationTotal((int) $r['id']);
         $open  = in_array($r['status'], ['pending', 'confirmed'], true);
 
         $this->api->respond([
@@ -94,7 +95,7 @@ class CustomerPaymentsController extends Controller
             $this->api->respond_error('A downpayment can only be made for a pending or confirmed booking.', 409);
         }
 
-        if ($this->payments->paidTotal((int) $r['id']) > 0) {
+        if ($this->payments->paidReservationTotal((int) $r['id']) > 0) {
             $this->api->respond_error('A payment is already recorded for this booking.', 409);
         }
 
@@ -155,5 +156,150 @@ class CustomerPaymentsController extends Controller
             'invoice_url' => $body['invoice_url'],
             'amount'      => $amount,
         ], 201);
+    }
+
+    /** POST /api/customer/reservations/{id}/service-payment */
+    public function servicePayment($id)
+    {
+        $this->api->require_method('POST');
+        $userId = $this->currentUserId();
+        $reservation = $this->reservations->findOwned((int) $id, $userId);
+
+        if (!$reservation) {
+            $this->api->respond_error('Reservation not found.', 404);
+        }
+
+        if (!$this->payments->acquireServicePaymentLock((int) $reservation['id'])) {
+            $this->api->respond_error('A service payment is already being prepared. Please try again shortly.', 409);
+        }
+
+        try {
+            $result = $this->createServiceInvoice($reservation, $userId);
+        } catch (\Throwable $e) {
+            error_log('Xendit service invoice preparation failed: ' . get_class($e) . ': ' . $e->getMessage());
+            $result = [
+                'error'  => 'The service invoice could not be prepared. Please try again.',
+                'status' => 500,
+            ];
+        } finally {
+            $this->payments->releaseServicePaymentLock((int) $reservation['id']);
+        }
+
+        if (isset($result['error'])) {
+            $this->api->respond_error($result['error'], $result['status']);
+        }
+
+        $this->api->respond([
+            'success'     => true,
+            'message'     => $result['message'],
+            'invoice_url' => $result['invoice_url'],
+            'amount'      => $result['amount'],
+        ], $result['http_status']);
+    }
+
+    private function createServiceInvoice(array $reservation, $userId)
+    {
+        $openPayment = $this->payments->pendingServicePayment((int) $reservation['id']);
+        if ($openPayment) {
+            if (empty($openPayment['invoice_url'])) {
+                return [
+                    'error'  => 'A service invoice is still being prepared. Try again shortly.',
+                    'status' => 409,
+                ];
+            }
+
+            return [
+                'message'     => 'Continue to your open service payment.',
+                'invoice_url' => $openPayment['invoice_url'],
+                'amount'      => (float) $openPayment['amount'],
+                'http_status' => 200,
+            ];
+        }
+
+        $items = array_values(array_filter(
+            $this->serviceRequests->forReservation((int) $reservation['id']),
+            static fn ($item) => $item['status'] === 'completed'
+                && $item['billing_status'] === 'unpaid'
+        ));
+        if (!$items) {
+            return [
+                'error'  => 'There are no completed, unpaid services to pay.',
+                'status' => 409,
+            ];
+        }
+
+        $amount = round(array_sum(array_map(
+            static fn ($item) => (float) $item['total_amount'],
+            $items
+        )), 2);
+        if ($amount <= 0) {
+            return ['error' => 'The service balance is invalid.', 'status' => 409];
+        }
+
+        $user = $this->usersModel->find($userId);
+        if (!$user || empty($user['email'])) {
+            return [
+                'error'  => 'A valid customer email is required for payment.',
+                'status' => 409,
+            ];
+        }
+
+        $externalId = 'SV-' . (int) $reservation['id'] . '-' . bin2hex(random_bytes(6));
+        $returnUrl = $this->frontendUrl() . '/payment-return?reservation_id='
+            . (int) $reservation['id'] . '&external_id=' . rawurlencode($externalId);
+
+        [$status, $body] = $this->payments->createInvoice([
+            'external_id'          => $externalId,
+            'amount'               => $amount,
+            'payer_email'          => $user['email'],
+            'description'          => 'Additional services for reservation ' . $reservation['reservation_code'],
+            'currency'             => 'PHP',
+            'invoice_duration'     => 86400,
+            'success_redirect_url' => $returnUrl . '&result=success',
+            'failure_redirect_url' => $returnUrl . '&result=failed',
+        ]);
+
+        if ($status < 200 || $status >= 300 || empty($body['invoice_url'])) {
+            error_log('Xendit service invoice failed: HTTP ' . $status . ' ' . json_encode($body));
+            return [
+                'error'  => 'The payment provider could not create the invoice. Try again.',
+                'status' => 502,
+            ];
+        }
+
+        try {
+            $this->payments->transaction();
+            $paymentId = $this->payments->insert([
+                'reservation_id' => (int) $reservation['id'],
+                'provider'       => 'xendit',
+                'kind'           => 'service',
+                'external_id'    => $externalId,
+                'invoice_id'     => (string) ($body['id'] ?? ''),
+                'invoice_url'    => $body['invoice_url'],
+                'amount'         => $amount,
+                'status'         => 'pending',
+                'paid_at'        => null,
+            ]);
+            if (!$paymentId) {
+                throw new \RuntimeException('Unable to record the service invoice.');
+            }
+
+            $this->payments->linkServiceItems((int) $paymentId, $items);
+            $this->payments->commit();
+        } catch (\Throwable $e) {
+            $this->payments->rollback();
+            error_log('Xendit service invoice record failed: ' . get_class($e) . ': ' . $e->getMessage());
+            return [
+                'error'  => 'The invoice was created but could not be recorded. Please contact the hotel before retrying.',
+                'status' => 500,
+            ];
+        }
+
+        return [
+            'message'     => 'Service invoice created.',
+            'invoice_url' => $body['invoice_url'],
+            'amount'      => $amount,
+            'http_status' => 201,
+        ];
     }
 }

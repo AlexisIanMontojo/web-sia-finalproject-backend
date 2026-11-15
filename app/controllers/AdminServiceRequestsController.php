@@ -9,6 +9,7 @@ class AdminServiceRequestsController extends Controller
     {
         parent::__construct();
         $this->call->model('ReservationServicesModel', 'requests');
+        $this->call->model('ReservationPaymentsModel', 'payments');
     }
 
     private function shape(array $r)
@@ -98,6 +99,10 @@ class AdminServiceRequestsController extends Controller
 
         if ($row['billing_status'] === 'paid') {
             $this->api->respond_error('This service is already marked paid.', 409);
+        }
+
+        if ($this->payments->hasPendingServicePaymentForService((int) $id)) {
+            $this->api->respond_error('This service is included in a pending Xendit invoice.', 409);
         }
 
         $this->requests->update((int) $id, [
