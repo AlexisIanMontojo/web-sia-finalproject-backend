@@ -46,6 +46,8 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 // Authentication (public)
 $router->post('/api/auth/register', 'AuthController::register');
+$router->post('/api/auth/google-signup', 'AuthController::googleSignup');
+$router->post('/api/auth/verify-email-code', 'AuthController::verifyEmailCode');
 $router->post('/api/auth/login', 'AuthController::login');
 $router->post('/api/auth/verify-email', 'AuthController::verifyEmail');
 $router->post('/api/auth/refresh', 'AuthController::refresh');
