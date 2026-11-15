@@ -25,11 +25,4 @@ class EmailVerificationTokensModel extends Model
         return $this->insert($data);
     }
 
-    public function invalidateFor($userId)
-    {
-        return $this->db->table($this->table)
-            ->where('user_id', (int) $userId)
-            ->where_null('used_at')
-            ->update(['used_at' => gmdate('Y-m-d H:i:s')]);
-    }
 }
