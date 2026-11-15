@@ -31,10 +31,10 @@ class TestimonialsController extends Controller
             'date'     => substr($r['created_at'], 0, 10),
         ], $rows);
 
-        $this->api->respond([
+        $this->api->respond_public([
             'success' => true,
             'summary' => $this->reviews->summary(),
             'data'    => $data,
-        ]);
+        ], 60, 300);
     }
 }

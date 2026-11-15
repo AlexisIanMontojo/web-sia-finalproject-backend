@@ -400,6 +400,44 @@ class Api
     }
 
     /**
+     * Respond to an explicitly public GET with a short-lived HTTP cache entry.
+     * Private or availability-sensitive endpoints must continue using respond().
+     */
+    public function respond_public($data, $max_age = 60, $stale_while_revalidate = 300)
+    {
+        $body = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($body === false) {
+            $this->respond_error('The response could not be encoded.', 500);
+        }
+
+        $etag = '"' . hash('sha256', $body) . '"';
+        $maxAge = max(0, (int) $max_age);
+        $staleWhileRevalidate = max(0, (int) $stale_while_revalidate);
+        header(
+            'Cache-Control: public, max-age=' . $maxAge
+                . ', stale-while-revalidate=' . $staleWhileRevalidate,
+            true
+        );
+        header('ETag: ' . $etag, true);
+
+        $ifNoneMatch = trim((string) ($_SERVER['HTTP_IF_NONE_MATCH'] ?? ''));
+        if ($ifNoneMatch !== '') {
+            foreach (explode(',', $ifNoneMatch) as $candidate) {
+                $candidate = trim($candidate);
+                if ($candidate === '*' || preg_replace('/^W\//', '', $candidate) === $etag) {
+                    http_response_code(304);
+                    exit;
+                }
+            }
+        }
+
+        http_response_code(200);
+        header('Content-Type: application/json; charset=utf-8');
+        echo $body;
+        exit;
+    }
+
+    /**
      * respond_error
      *
      * @param string $message

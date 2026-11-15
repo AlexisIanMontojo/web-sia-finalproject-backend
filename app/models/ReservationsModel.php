@@ -34,10 +34,12 @@ class ReservationsModel extends Model
     /** Rooms the admin has blocked for any night in the range. */
     private function blockedRoomIds($from, $to)
     {
-        $rows = $this->db->table('room_blocks')
-            ->where('start_date', '<', $to)
-            ->where('end_date', '>', $from)
-            ->get_all();
+        $rows = $this->db->raw(
+            'SELECT room_id
+             FROM room_blocks
+             WHERE start_date < ? AND end_date > ?',
+            [$to, $from]
+        )->fetchAll(PDO::FETCH_ASSOC);
 
         return array_map(fn ($r) => (int) $r['room_id'], $rows);
     }
@@ -102,6 +104,29 @@ class ReservationsModel extends Model
             $rooms,
             fn ($room) => !in_array((int) $room['id'], $unavailable, true)
         ));
+    }
+
+    /** Available room counts by category, using one query for public search results. */
+    public function availableCountsByCategory($checkIn, $checkOut, $guests)
+    {
+        $unavailable = array_fill_keys($this->unavailableRoomIds($checkIn, $checkOut), true);
+        $rooms = $this->db->raw(
+            "SELECT id, category_id
+             FROM rooms
+             WHERE is_active = 1 AND status = 'available' AND capacity >= ?",
+            [(int) $guests]
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        $counts = [];
+        foreach ($rooms as $room) {
+            $roomId = (int) $room['id'];
+            if (!isset($unavailable[$roomId])) {
+                $categoryId = (int) $room['category_id'];
+                $counts[$categoryId] = ($counts[$categoryId] ?? 0) + 1;
+            }
+        }
+
+        return $counts;
     }
 
     public function forUser($userId)
@@ -173,21 +198,17 @@ class ReservationsModel extends Model
         /** Room ids that cannot be sold for the range: held by a booking or blocked by the admin. */
     public function unavailableRoomIds($from, $to)
     {
-        $ids = array_map(
-            fn ($r) => (int) $r['room_id'],
-            $this->holdingBetween($from, $to)
-        );
+        $statusPlaceholders = implode(',', array_fill(0, count(self::HOLDING), '?'));
+        $booked = $this->db->raw(
+            'SELECT DISTINCT room_id
+             FROM reservations
+             WHERE status IN (' . $statusPlaceholders . ')
+               AND check_in_date < ? AND check_out_date > ?',
+            array_merge(self::HOLDING, [$to, $from])
+        )->fetchAll(PDO::FETCH_ASSOC);
+        $ids = array_map(fn ($r) => (int) $r['room_id'], $booked);
 
-        $blocks = $this->db->table('room_blocks')
-            ->where('start_date', '<', $to)
-            ->where('end_date', '>', $from)
-            ->get_all();
-
-        foreach ($blocks as $b) {
-            $ids[] = (int) $b['room_id'];
-        }
-
-        return array_values(array_unique($ids));
+        return array_values(array_unique(array_merge($ids, $this->blockedRoomIds($from, $to))));
     }
 
         /** Moves a reservation to a new status and records the change in one transaction. */

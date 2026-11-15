@@ -36,14 +36,18 @@ class MapController extends Controller
         $h = $this->hotel->current();
 
         if (!$h || $h['latitude'] === null || $h['longitude'] === null) {
-            $this->api->respond(['success' => true, 'configured' => false, 'map' => null]);
+            $this->api->respond_public(
+                ['success' => true, 'configured' => false, 'map' => null],
+                60,
+                300
+            );
         }
 
-        $this->api->respond([
+        $this->api->respond_public([
             'success'    => true,
             'configured' => true,
             'map'        => $this->mapPayload($h),
-        ]);
+        ], 60, 300);
     }
 
     /** Admin: set the hotel's location. */

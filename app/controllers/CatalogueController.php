@@ -132,7 +132,7 @@ class CatalogueController extends Controller
             $data[] = $this->shape($r, $s, $unavailable);
         }
 
-        $this->api->respond([
+        $response = [
             'success'    => true,
             'search'     => $s,
             'categories' => array_map(
@@ -146,7 +146,12 @@ class CatalogueController extends Controller
                     : null,
             ],
             'data' => $data,
-        ]);
+        ];
+
+        if (!$s['has_dates']) {
+            $this->api->respond_public($response, 30, 60);
+        }
+        $this->api->respond($response);
     }
 
     /** GET /api/public/rooms/{id}: one room, with its quote for the dates when given. */
@@ -160,10 +165,15 @@ class CatalogueController extends Controller
             $this->api->respond_error('Room not found.', 404);
         }
 
-        $this->api->respond([
+        $response = [
             'success' => true,
             'search'  => $s,
             'room'    => $this->shape($room, $s, $this->unavailableFor($s)),
-        ]);
+        ];
+
+        if (!$s['has_dates']) {
+            $this->api->respond_public($response, 30, 60);
+        }
+        $this->api->respond($response);
     }
 }

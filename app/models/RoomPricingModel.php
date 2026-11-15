@@ -12,6 +12,8 @@ class RoomPricingModel extends Model
     ];
     protected $guarded = ['id'];
 
+    private $activePricesByCategory = [];
+
     public function allWithCategory()
     {
         return $this->db->raw(
@@ -39,16 +41,26 @@ class RoomPricingModel extends Model
     /** The active price in effect on a date. Reservations will use this later. */
     public function activeOn($categoryId, $onDate)
     {
-        foreach ($this->db->table($this->table)
-                    ->where('category_id', (int) $categoryId)
-                    ->where('is_active', 1)
-                    ->get_all() as $price) {
+        foreach ($this->activePricesFor($categoryId) as $price) {
             $end = $price['effective_until'] ?: '9999-12-31';
             if ($price['effective_from'] <= $onDate && $end >= $onDate) {
                 return $price;
             }
         }
         return null;
+    }
+
+    private function activePricesFor($categoryId)
+    {
+        $categoryId = (int) $categoryId;
+        if (!array_key_exists($categoryId, $this->activePricesByCategory)) {
+            $this->activePricesByCategory[$categoryId] = $this->db->table($this->table)
+                ->where('category_id', $categoryId)
+                ->where('is_active', 1)
+                ->get_all();
+        }
+
+        return $this->activePricesByCategory[$categoryId];
     }
 
     /** Calculate a stay total using the active price for each booked night. */
@@ -106,10 +118,7 @@ class RoomPricingModel extends Model
     {
         $newEnd = $until ?: '9999-12-31';
 
-        foreach ($this->db->table($this->table)
-                    ->where('category_id', (int) $categoryId)
-                    ->where('is_active', 1)
-                    ->get_all() as $price) {
+        foreach ($this->activePricesFor($categoryId) as $price) {
             if ((int) $price['id'] === (int) $ignoreId) {
                 continue;
             }

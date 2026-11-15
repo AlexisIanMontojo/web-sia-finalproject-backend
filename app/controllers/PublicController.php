@@ -52,7 +52,7 @@ class PublicController extends Controller
             $this->api->respond_error('Hotel information is not set up yet.', 404);
         }
 
-        $this->api->respond([
+        $this->api->respond_public([
             'success' => true,
             'hotel'   => [
                 'name'           => $info['name'],
@@ -64,13 +64,19 @@ class PublicController extends Controller
                 'amenities'      => $info['amenities'],
                 'policies'       => $info['policies'],
             ],
-        ]);
+        ], 60, 300);
     }
 
     public function search()
     {
         $this->api->require_method('GET');
         $p = $this->searchParams();
+
+        $availableByCategory = $this->reservations->availableCountsByCategory(
+            $p['check_in'],
+            $p['check_out'],
+            $p['guests']
+        );
 
         $data = [];
         foreach ($this->categories->allActive() as $c) {
@@ -80,9 +86,7 @@ class PublicController extends Controller
                 'description'     => $c['description'],
                 'max_occupancy'   => (int) $c['max_occupancy'],
                 'amenities'       => $c['amenities'] ? (json_decode($c['amenities'], true) ?: []) : [],
-                'available_rooms' => count($this->reservations->availableRooms(
-                    (int) $c['id'], $p['check_in'], $p['check_out'], $p['guests']
-                )),
+                'available_rooms' => $availableByCategory[(int) $c['id']] ?? 0,
                 'quote'           => $this->pricing->quote(
                     (int) $c['id'], $p['check_in'], $p['check_out'], $p['guests'], (int) $c['max_occupancy']
                 ),
