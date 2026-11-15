@@ -709,6 +709,100 @@ class AuthController extends Controller
 
     private function sendAuthEmail($email, $username, $subject, $html, $plainText)
     {
+        $brevoApiKey = getenv('BREVO_API_KEY');
+        if ($brevoApiKey) {
+            $fromEmail = getenv('BREVO_SENDER_EMAIL');
+            $fromName = getenv('BREVO_SENDER_NAME') ?: 'Hotel Reservation System';
+
+            if (!$fromEmail || !$email) {
+                error_log('Authentication email via Brevo failed: Sender or recipient is missing.');
+                return false;
+            }
+            if (!function_exists('curl_init')) {
+                error_log('Authentication email via Brevo failed: PHP cURL is unavailable.');
+                return false;
+            }
+
+            try {
+                $payload = json_encode([
+                    'sender' => [
+                        'name'  => $fromName,
+                        'email' => $fromEmail,
+                    ],
+                    'to' => [[
+                        'name'  => $username,
+                        'email' => $email,
+                    ]],
+                    'subject'     => $subject,
+                    'htmlContent' => $html,
+                    'textContent' => $plainText,
+                ], JSON_THROW_ON_ERROR);
+
+                $curl = curl_init('https://api.brevo.com/v3/smtp/email');
+                curl_setopt_array($curl, [
+                    CURLOPT_POST           => true,
+                    CURLOPT_POSTFIELDS     => $payload,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_CONNECTTIMEOUT => 5,
+                    CURLOPT_TIMEOUT        => 15,
+                    CURLOPT_HTTPHEADER     => [
+                        'accept: application/json',
+                        'api-key: ' . $brevoApiKey,
+                        'content-type: application/json',
+                    ],
+                    CURLOPT_SSL_VERIFYPEER => true,
+                    CURLOPT_SSL_VERIFYHOST => 2,
+                ]);
+
+                $response = curl_exec($curl);
+                $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+
+                if ($response === false) {
+                    $error = curl_error($curl);
+                    curl_close($curl);
+                    error_log('Authentication email via Brevo failed: ' . $error);
+                    return false;
+                }
+                curl_close($curl);
+
+                if ($status < 200 || $status >= 300) {
+                    error_log('Authentication email via Brevo returned HTTP ' . $status . '.');
+                    return false;
+                }
+
+                return true;
+            } catch (\Throwable $e) {
+                error_log('Authentication email via Brevo failed: ' . get_class($e) . ': ' . $e->getMessage());
+                return false;
+            }
+        }
+
+        $resendApiKey = getenv('RESEND_API_KEY');
+        if ($resendApiKey) {
+            $fromEmail = getenv('RESEND_FROM_EMAIL');
+            $fromName = getenv('MAIL_FROM_NAME') ?: 'Hotel Reservation System';
+
+            if (!$fromEmail) {
+                error_log('Authentication email via Resend failed: RESEND_FROM_EMAIL is not configured.');
+                return false;
+            }
+
+            try {
+                $resend = \Resend::client($resendApiKey);
+                $resend->emails->send([
+                    'from'    => $fromName . ' <' . $fromEmail . '>',
+                    'to'      => [$email],
+                    'subject' => $subject,
+                    'html'    => $html,
+                    'text'    => $plainText,
+                ]);
+                return true;
+            } catch (\Throwable $e) {
+                error_log('Authentication email via Resend failed: ' . get_class($e) . ': ' . $e->getMessage());
+                return false;
+            }
+        }
+
         $smtpHost = getenv('MAIL_HOST') ?: 'smtp.gmail.com';
         $smtpPort = (int) (getenv('MAIL_PORT') ?: 587);
         $smtpUser = getenv('MAIL_USERNAME');
