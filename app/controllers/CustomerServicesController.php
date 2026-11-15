@@ -116,12 +116,14 @@ class CustomerServicesController extends Controller
 
     private function shapePendingPayment($payment)
     {
-        if (!$payment || empty($payment['invoice_url'])) {
+        if (!$payment) {
             return null;
         }
 
         return [
+            'provider'    => $payment['provider'],
             'amount'      => (float) $payment['amount'],
+            'status'      => $payment['status'],
             'invoice_url' => $payment['invoice_url'],
         ];
     }

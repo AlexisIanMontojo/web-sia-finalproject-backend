@@ -57,6 +57,13 @@ class ReservationServicesModel extends Model
     public function adminList($status)
     {
         $sql = 'SELECT rs.*, sc.name, sc.category, sc.unit,
+                (SELECT p.provider
+                 FROM reservation_payment_services ps
+                 INNER JOIN reservation_payments p ON p.id = ps.payment_id
+                 WHERE ps.reservation_service_id = rs.id
+                   AND p.kind = \'service\' AND p.status = \'pending\'
+                 ORDER BY p.id DESC
+                 LIMIT 1) AS pending_payment_provider,
                        r.reservation_code, r.check_in_date, r.check_out_date,
                        u.username, rm.room_number
                 FROM reservation_services rs

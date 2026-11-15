@@ -54,14 +54,45 @@ class ReservationPaymentsModel extends Model
         $rows = $this->db->raw(
             "SELECT *
              FROM reservation_payments
-             WHERE reservation_id = ? AND provider = 'xendit'
-               AND kind = 'service' AND status = 'pending'
+             WHERE reservation_id = ? AND kind = 'service' AND status = 'pending'
              ORDER BY id DESC
              LIMIT 1",
             [(int) $reservationId]
         )->fetchAll(PDO::FETCH_ASSOC);
 
         return $rows[0] ?? null;
+    }
+
+    public function pendingReservationPayment($reservationId)
+    {
+        $rows = $this->db->raw(
+            "SELECT *
+             FROM reservation_payments
+             WHERE reservation_id = ? AND kind <> 'service' AND status = 'pending'
+             ORDER BY id DESC
+             LIMIT 1",
+            [(int) $reservationId]
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        return $rows[0] ?? null;
+    }
+
+    public function acquireReservationPaymentLock($reservationId)
+    {
+        $row = $this->db->raw(
+            'SELECT GET_LOCK(?, 5) AS acquired',
+            ['hotel-reservation-payment-' . (int) $reservationId]
+        )->fetch(PDO::FETCH_ASSOC);
+
+        return (int) ($row['acquired'] ?? 0) === 1;
+    }
+
+    public function releaseReservationPaymentLock($reservationId)
+    {
+        $this->db->raw(
+            'SELECT RELEASE_LOCK(?)',
+            ['hotel-reservation-payment-' . (int) $reservationId]
+        );
     }
 
     public function acquireServicePaymentLock($reservationId)
@@ -100,11 +131,14 @@ class ReservationPaymentsModel extends Model
     public function linkServiceItems($paymentId, array $items)
     {
         foreach ($items as $item) {
-            $this->db->table('reservation_payment_services')->insert([
+            $linked = $this->db->table('reservation_payment_services')->insert([
                 'payment_id'            => (int) $paymentId,
                 'reservation_service_id'=> (int) $item['id'],
                 'amount'                => (float) $item['total_amount'],
             ]);
+            if (!$linked) {
+                throw new \RuntimeException('Unable to link a service to its payment.');
+            }
         }
     }
 
@@ -146,7 +180,7 @@ class ReservationPaymentsModel extends Model
                 'paid_at' => $paidAt,
             ]);
             if ($updated === false) {
-                throw new \RuntimeException('Unable to record the verified Xendit payment.');
+                throw new \RuntimeException('Unable to record the payment.');
             }
 
             if ($payment['kind'] === 'service') {

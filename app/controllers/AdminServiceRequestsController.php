@@ -30,6 +30,7 @@ class AdminServiceRequestsController extends Controller
             'notes'            => $r['notes'],
             'status'           => $r['status'],
             'billing_status'   => $r['billing_status'],
+            'pending_payment_provider' => $r['pending_payment_provider'],
         ];
     }
 

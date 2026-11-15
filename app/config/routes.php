@@ -97,6 +97,7 @@ $router->group(['middleware' => 'customer'], function ($router) {
     $router->post('/api/customer/reservation-services/{id}/cancel', 'CustomerServicesController::cancel');
 
     $router->get('/api/customer/reservations/{id}/payments', 'CustomerPaymentsController::index');
+    $router->post('/api/customer/reservations/{id}/payment', 'CustomerPaymentsController::reservationPayment');
     $router->post('/api/customer/reservations/{id}/downpayment', 'CustomerPaymentsController::downpayment');
     $router->post('/api/customer/reservations/{id}/service-payment', 'CustomerPaymentsController::servicePayment');
 });
@@ -135,6 +136,7 @@ $router->group(['middleware' => 'manager'], function ($router) {
     $router->get('/api/admin/dashboard/stats', 'DashboardController::stats');
     $router->get('/api/admin/reports', 'AdminReportsController::index');
     $router->get('/api/admin/payments', 'AdminPaymentsController::index');
+    $router->post('/api/admin/payments/{id}/cash-paid', 'AdminPaymentsController::markCashPaid');
 
     $router->get('/api/admin/categories', 'CategoriesController::index');
     $router->post('/api/admin/categories', 'CategoriesController::store');

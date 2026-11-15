@@ -40,6 +40,7 @@ class CustomerPaymentsController extends Controller
     {
         return [
             'id'          => (int) $p['id'],
+            'provider'    => $p['provider'],
             'kind'        => $p['kind'],
             'amount'      => (float) $p['amount'],
             'status'      => $p['status'],
@@ -72,6 +73,7 @@ class CustomerPaymentsController extends Controller
             'total'          => $total,
             'paid'           => $paid,
             'balance'        => max(0, round($total - $paid, 2)),
+            'open'           => $open,
             'downpayment_due' => ($open && $paid <= 0) ? $this->depositFor($total) : 0,
             'data'           => array_map(
                 [$this, 'shapePayment'],
@@ -84,49 +86,161 @@ class CustomerPaymentsController extends Controller
     public function downpayment($id)
     {
         $this->api->require_method('POST');
+        $this->startReservationPayment((int) $id, 'downpayment', 'xendit');
+    }
+
+    /** POST /api/customer/reservations/{id}/payment */
+    public function reservationPayment($id)
+    {
+        $this->api->require_method('POST');
+        $in = $this->api->body();
+        $amountType = (string) ($in['amount_type'] ?? 'downpayment');
+        $method = (string) ($in['method'] ?? 'xendit');
+
+        if (!in_array($amountType, ['downpayment', 'full'], true)) {
+            $this->api->respond_error('Choose a valid payment amount.', 422);
+        }
+        if (!in_array($method, ['xendit', 'cash'], true)) {
+            $this->api->respond_error('Choose Xendit or cash.', 422);
+        }
+
+        $this->startReservationPayment((int) $id, $amountType, $method);
+    }
+
+    private function startReservationPayment($id, $amountType, $method)
+    {
         $userId = $this->currentUserId();
 
-        $r = $this->reservations->findOwned((int) $id, $userId);
+        $r = $this->reservations->findOwned($id, $userId);
         if (!$r) {
             $this->api->respond_error('Reservation not found.', 404);
         }
 
         if (!in_array($r['status'], ['pending', 'confirmed'], true)) {
-            $this->api->respond_error('A downpayment can only be made for a pending or confirmed booking.', 409);
+            $this->api->respond_error('Payment is only available for a pending or confirmed booking.', 409);
         }
 
-        if ($this->payments->paidReservationTotal((int) $r['id']) > 0) {
-            $this->api->respond_error('A payment is already recorded for this booking.', 409);
+        if (!$this->payments->acquireReservationPaymentLock((int) $r['id'])) {
+            $this->api->respond_error('A payment is already being prepared. Please try again shortly.', 409);
         }
 
-        // Reuse an open invoice rather than creating duplicates.
-        foreach ($this->payments->forReservation((int) $r['id']) as $p) {
-            if ($p['status'] === 'pending' && $p['kind'] === 'downpayment' && !empty($p['invoice_url'])) {
-                $this->api->respond([
-                    'success'     => true,
-                    'message'     => 'Continue to your open payment.',
-                    'invoice_url' => $p['invoice_url'],
-                    'amount'      => (float) $p['amount'],
-                ]);
+        try {
+            $result = $this->createReservationPayment($r, $userId, $amountType, $method);
+        } catch (\Throwable $e) {
+            error_log('Reservation payment preparation failed: ' . get_class($e) . ': ' . $e->getMessage());
+            $result = [
+                'error'  => 'The payment could not be prepared. Please try again.',
+                'status' => 500,
+            ];
+        } finally {
+            $this->payments->releaseReservationPaymentLock((int) $r['id']);
+        }
+
+        if (isset($result['error'])) {
+            $this->api->respond_error($result['error'], $result['status']);
+        }
+
+        $this->api->respond([
+            'success'     => true,
+            'message'     => $result['message'],
+            'provider'    => $result['provider'],
+            'status'      => $result['status'],
+            'invoice_url' => $result['invoice_url'],
+            'amount'      => $result['amount'],
+        ], $result['http_status']);
+    }
+
+    private function createReservationPayment(array $reservation, $userId, $amountType, $method)
+    {
+        $paid = $this->payments->paidReservationTotal((int) $reservation['id']);
+        $balance = max(0, round((float) $reservation['total_amount'] - $paid, 2));
+        if ($amountType === 'downpayment') {
+            if ($paid > 0) {
+                return ['error' => 'A payment is already recorded. Pay the remaining balance instead.', 'status' => 409];
             }
+            $amount = $this->depositFor((float) $reservation['total_amount']);
+            $kind = 'downpayment';
+        } else {
+            $amount = $balance;
+            $kind = $paid > 0 ? 'balance' : 'full';
         }
 
-        $amount = $this->depositFor((float) $r['total_amount']);
         if ($amount <= 0) {
-            $this->api->respond_error('Nothing to pay for this booking.', 409);
+            return ['error' => 'Nothing is due for this booking.', 'status' => 409];
         }
 
-        $user       = $this->usersModel->find($userId);
-        $externalId = 'DP-' . (int) $r['id'] . '-' . bin2hex(random_bytes(6));
+        $pending = $this->payments->pendingReservationPayment((int) $reservation['id']);
+        if ($pending) {
+            if (
+                $pending['provider'] === $method
+                && $pending['kind'] === $kind
+                && abs((float) $pending['amount'] - $amount) < 0.01
+            ) {
+                return [
+                    'message'     => $method === 'cash'
+                        ? 'Cash payment is awaiting confirmation.'
+                        : 'Continue to your open payment.',
+                    'provider'    => $method,
+                    'status'      => 'pending',
+                    'invoice_url' => $pending['invoice_url'],
+                    'amount'      => (float) $pending['amount'],
+                    'http_status' => 200,
+                ];
+            }
+
+            return [
+                'error'  => 'Another reservation payment is awaiting confirmation. Complete it or contact the hotel.',
+                'status' => 409,
+            ];
+        }
+
+        $externalId = ($method === 'cash' ? 'CASH-' : strtoupper(substr($kind, 0, 2)) . '-')
+            . (int) $reservation['id'] . '-' . bin2hex(random_bytes(6));
+        if ($method === 'cash') {
+            $paymentId = $this->payments->insert([
+                'reservation_id' => (int) $reservation['id'],
+                'provider'       => 'cash',
+                'kind'           => $kind,
+                'external_id'    => $externalId,
+                'invoice_id'     => '',
+                'invoice_url'    => '',
+                'amount'         => $amount,
+                'status'         => 'pending',
+                'paid_at'        => null,
+            ]);
+            if (!$paymentId) {
+                throw new \RuntimeException('Unable to record the cash payment request.');
+            }
+
+            return [
+                'message'     => 'Cash payment requested. Please pay the hotel in person.',
+                'provider'    => 'cash',
+                'status'      => 'pending',
+                'invoice_url' => null,
+                'amount'      => $amount,
+                'http_status' => 201,
+            ];
+        }
+
+        $user = $this->usersModel->find($userId);
+        if (!$user || empty($user['email'])) {
+            return ['error' => 'A valid customer email is required for Xendit payment.', 'status' => 409];
+        }
+
         $front      = $this->frontendUrl();
-        $returnUrl  = $front . '/payment-return?reservation_id=' . (int) $r['id']
+        $returnUrl  = $front . '/payment-return?reservation_id=' . (int) $reservation['id']
             . '&external_id=' . rawurlencode($externalId);
+        $description = $kind === 'downpayment'
+            ? "Downpayment for reservation {$reservation['reservation_code']}"
+            : ($kind === 'balance'
+                ? "Remaining balance for reservation {$reservation['reservation_code']}"
+                : "Full reservation payment for {$reservation['reservation_code']}");
 
         [$status, $body] = $this->payments->createInvoice([
             'external_id'          => $externalId,
             'amount'               => $amount,
             'payer_email'          => $user['email'],
-            'description'          => "Downpayment for reservation {$r['reservation_code']}",
+            'description'          => $description,
             'currency'             => 'PHP',
             'invoice_duration'     => 86400,
             'success_redirect_url' => $returnUrl . '&result=success',
@@ -135,13 +249,13 @@ class CustomerPaymentsController extends Controller
 
         if ($status < 200 || $status >= 300 || empty($body['invoice_url'])) {
             error_log('Xendit invoice failed: HTTP ' . $status . ' ' . json_encode($body));
-            $this->api->respond_error('The payment provider could not create the invoice. Try again.', 502);
+            return ['error' => 'The payment provider could not create the invoice. Try again.', 'status' => 502];
         }
 
-        $this->payments->insert([
-            'reservation_id' => (int) $r['id'],
+        $paymentId = $this->payments->insert([
+            'reservation_id' => (int) $reservation['id'],
             'provider'       => 'xendit',
-            'kind'           => 'downpayment',
+            'kind'           => $kind,
             'external_id'    => $externalId,
             'invoice_id'     => (string) ($body['id'] ?? ''),
             'invoice_url'    => $body['invoice_url'],
@@ -149,19 +263,30 @@ class CustomerPaymentsController extends Controller
             'status'         => 'pending',
             'paid_at'        => null,
         ]);
+        if (!$paymentId) {
+            throw new \RuntimeException('Unable to record the Xendit invoice.');
+        }
 
-        $this->api->respond([
-            'success'     => true,
+        return [
             'message'     => 'Invoice created.',
+            'provider'    => 'xendit',
+            'status'      => 'pending',
             'invoice_url' => $body['invoice_url'],
             'amount'      => $amount,
-        ], 201);
+            'http_status' => 201,
+        ];
     }
 
     /** POST /api/customer/reservations/{id}/service-payment */
     public function servicePayment($id)
     {
         $this->api->require_method('POST');
+        $in = $this->api->body();
+        $method = (string) ($in['method'] ?? 'xendit');
+        if (!in_array($method, ['xendit', 'cash'], true)) {
+            $this->api->respond_error('Choose Xendit or cash.', 422);
+        }
+
         $userId = $this->currentUserId();
         $reservation = $this->reservations->findOwned((int) $id, $userId);
 
@@ -174,9 +299,9 @@ class CustomerPaymentsController extends Controller
         }
 
         try {
-            $result = $this->createServiceInvoice($reservation, $userId);
+            $result = $this->createServicePayment($reservation, $userId, $method);
         } catch (\Throwable $e) {
-            error_log('Xendit service invoice preparation failed: ' . get_class($e) . ': ' . $e->getMessage());
+            error_log('Service payment preparation failed: ' . get_class($e) . ': ' . $e->getMessage());
             $result = [
                 'error'  => 'The service invoice could not be prepared. Please try again.',
                 'status' => 500,
@@ -192,24 +317,30 @@ class CustomerPaymentsController extends Controller
         $this->api->respond([
             'success'     => true,
             'message'     => $result['message'],
+            'provider'    => $result['provider'],
+            'status'      => $result['status'],
             'invoice_url' => $result['invoice_url'],
             'amount'      => $result['amount'],
         ], $result['http_status']);
     }
 
-    private function createServiceInvoice(array $reservation, $userId)
+    private function createServicePayment(array $reservation, $userId, $method)
     {
         $openPayment = $this->payments->pendingServicePayment((int) $reservation['id']);
         if ($openPayment) {
-            if (empty($openPayment['invoice_url'])) {
+            if ($openPayment['provider'] !== $method) {
                 return [
-                    'error'  => 'A service invoice is still being prepared. Try again shortly.',
+                    'error'  => 'A different service payment is awaiting confirmation. Complete it or contact the hotel.',
                     'status' => 409,
                 ];
             }
 
             return [
-                'message'     => 'Continue to your open service payment.',
+                'message'     => $method === 'cash'
+                    ? 'Cash payment is awaiting confirmation.'
+                    : 'Continue to your open service payment.',
+                'provider'    => $method,
+                'status'      => 'pending',
                 'invoice_url' => $openPayment['invoice_url'],
                 'amount'      => (float) $openPayment['amount'],
                 'http_status' => 200,
@@ -236,6 +367,48 @@ class CustomerPaymentsController extends Controller
             return ['error' => 'The service balance is invalid.', 'status' => 409];
         }
 
+        $externalId = ($method === 'cash' ? 'CS-' : 'SV-')
+            . (int) $reservation['id'] . '-' . bin2hex(random_bytes(6));
+
+        if ($method === 'cash') {
+            try {
+                $this->payments->transaction();
+                $paymentId = $this->payments->insert([
+                    'reservation_id' => (int) $reservation['id'],
+                    'provider'       => 'cash',
+                    'kind'           => 'service',
+                    'external_id'    => $externalId,
+                    'invoice_id'     => '',
+                    'invoice_url'    => '',
+                    'amount'         => $amount,
+                    'status'         => 'pending',
+                    'paid_at'        => null,
+                ]);
+                if (!$paymentId) {
+                    throw new \RuntimeException('Unable to record the cash service payment.');
+                }
+
+                $this->payments->linkServiceItems((int) $paymentId, $items);
+                $this->payments->commit();
+            } catch (\Throwable $e) {
+                $this->payments->rollback();
+                error_log('Cash service payment record failed: ' . get_class($e) . ': ' . $e->getMessage());
+                return [
+                    'error'  => 'The cash payment request could not be recorded. Please try again.',
+                    'status' => 500,
+                ];
+            }
+
+            return [
+                'message'     => 'Cash payment requested. Please pay the hotel in person.',
+                'provider'    => 'cash',
+                'status'      => 'pending',
+                'invoice_url'    => '',
+                'amount'      => $amount,
+                'http_status' => 201,
+            ];
+        }
+
         $user = $this->usersModel->find($userId);
         if (!$user || empty($user['email'])) {
             return [
@@ -244,7 +417,6 @@ class CustomerPaymentsController extends Controller
             ];
         }
 
-        $externalId = 'SV-' . (int) $reservation['id'] . '-' . bin2hex(random_bytes(6));
         $returnUrl = $this->frontendUrl() . '/payment-return?reservation_id='
             . (int) $reservation['id'] . '&external_id=' . rawurlencode($externalId);
 
@@ -297,6 +469,8 @@ class CustomerPaymentsController extends Controller
 
         return [
             'message'     => 'Service invoice created.',
+            'provider'    => 'xendit',
+            'status'      => 'pending',
             'invoice_url' => $body['invoice_url'],
             'amount'      => $amount,
             'http_status' => 201,
