@@ -130,15 +130,22 @@ class ReservationPaymentsModel extends Model
 
     public function linkServiceItems($paymentId, array $items)
     {
-        foreach ($items as $item) {
-            $linked = $this->db->table('reservation_payment_services')->insert([
+        if (!$items) {
+            return;
+        }
+
+        $records = array_map(
+            static fn ($item) => [
                 'payment_id'            => (int) $paymentId,
                 'reservation_service_id'=> (int) $item['id'],
                 'amount'                => (float) $item['total_amount'],
-            ]);
-            if (!$linked) {
-                throw new \RuntimeException('Unable to link a service to its payment.');
-            }
+            ],
+            $items
+        );
+
+        $linked = $this->db->table('reservation_payment_services')->bulk_insert($records);
+        if (!$linked) {
+            throw new \RuntimeException('Unable to link services to their payment.');
         }
     }
 
@@ -196,15 +203,23 @@ class ReservationPaymentsModel extends Model
 
     public function syncPendingInvoices($reservationId, $externalId = '')
     {
-        foreach ($this->forReservation($reservationId) as $payment) {
-            if (
-                $payment['provider'] !== 'xendit'
-                || $payment['status'] !== 'pending'
-                || empty($payment['invoice_id'])
-                || ($externalId !== '' && $payment['external_id'] !== $externalId)
-            ) {
-                continue;
-            }
+        if ($externalId === '') {
+            return;
+        }
+
+        $payments = $this->db->raw(
+            "SELECT *
+             FROM reservation_payments
+             WHERE reservation_id = ?
+               AND external_id = ?
+               AND provider = 'xendit'
+               AND status = 'pending'
+               AND invoice_id <> ''
+             LIMIT 1",
+            [(int) $reservationId, (string) $externalId]
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($payments as $payment) {
 
             [$code, $invoice] = $this->fetchInvoice($payment['invoice_id']);
             if ($code !== 200) {

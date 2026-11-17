@@ -71,7 +71,7 @@ class Security_headers
             'allowed_origins' => [],
             'methods'         => 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
             'headers'         => 'Authorization, Content-Type, X-Requested-With',
-            'expose_headers'  => 'X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After',
+            'expose_headers'  => 'X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After, Server-Timing',
             'credentials'     => false,          // only needed for cookie auth
             'max_age'         => 600,
         ],

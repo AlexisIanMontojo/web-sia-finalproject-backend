@@ -212,15 +212,6 @@ class ReservationsController extends Controller
         $this->api->require_method('POST');
         $userId = $this->currentUserId();
 
-        $reservation = $this->reservations->findOwned((int) $id, $userId);
-        if (!$reservation) {
-            $this->api->respond_error('Reservation not found.', 404);
-        }
-
-        if (!ReservationsModel::isCancellable($reservation)) {
-            $this->api->respond_error('This reservation can no longer be cancelled.', 409);
-        }
-
         $in     = $this->api->body();
         $reason = trim((string) ($in['reason'] ?? '')) ?: 'Cancelled by customer';
 

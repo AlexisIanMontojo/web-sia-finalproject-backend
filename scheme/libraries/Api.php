@@ -393,9 +393,11 @@ class Api
      */
     public function respond($data, $code = 200)
     {
+        $body = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $this->add_server_timing();
         http_response_code($code);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        echo $body;
         exit;
     }
 
@@ -413,6 +415,7 @@ class Api
         $etag = '"' . hash('sha256', $body) . '"';
         $maxAge = max(0, (int) $max_age);
         $staleWhileRevalidate = max(0, (int) $stale_while_revalidate);
+        $this->add_server_timing();
         header(
             'Cache-Control: public, max-age=' . $maxAge
                 . ', stale-while-revalidate=' . $staleWhileRevalidate,
@@ -435,6 +438,41 @@ class Api
         header('Content-Type: application/json; charset=utf-8');
         echo $body;
         exit;
+    }
+
+    /**
+     * Expose safe request and database timings through the standard Server-Timing header.
+     *
+     * @return void
+     */
+    private function add_server_timing()
+    {
+        if (headers_sent()) {
+            return;
+        }
+
+        $startedAt = defined('APP_REQUEST_STARTED_AT')
+            ? APP_REQUEST_STARTED_AT
+            : (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
+        $appMs = max(0, (microtime(true) - $startedAt) * 1000);
+        $db = $this->_lava->properties['db'] ?? null;
+        $metrics = is_object($db) && method_exists($db, 'get_performance_metrics')
+            ? $db->get_performance_metrics()
+            : [
+                'connection_count' => 0,
+                'connection_ms'    => 0,
+                'query_count'      => 0,
+                'query_ms'         => 0,
+            ];
+
+        header(sprintf(
+            'Server-Timing: app;dur=%.1f, db;dur=%.1f, dbconn;dur=%.1f, dbconnections;desc="%d", dbqueries;desc="%d"',
+            $appMs,
+            (float) $metrics['query_ms'],
+            (float) $metrics['connection_ms'],
+            (int) $metrics['connection_count'],
+            (int) $metrics['query_count']
+        ));
     }
 
     /**

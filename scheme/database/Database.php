@@ -40,6 +40,19 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 * ------------------------------------------------------
  */
 class Database {
+    /** @var array<string, Database> Connections reused by name during this PHP request */
+    private static array $instances = [];
+
+    /** @var array Request-wide counters, shared by database instances in this PHP request */
+    private static array $request_metrics = [
+        'connection_count' => 0,
+        'connection_ms'    => 0.0,
+        'query_count'      => 0,
+        'query_ms'         => 0.0,
+        'query_max_ms'     => 0.0,
+        'slow_queries'     => [],
+    ];
+
     /**
      * Database instance
      *
@@ -186,11 +199,14 @@ class Database {
      */
     private $operators = array('=', '!=', '<', '>', '<=', '>=', '<>');
 
-    /** @var array Executed queries log */
+    /** @var array Executed queries log, enabled only when DB_QUERY_LOG is explicitly enabled */
     private array $query_log = [];
 
     /** @var bool Whether query logging is enabled */
-    private bool $query_logging = true;
+    private bool $query_logging = false;
+
+    /** @var float Database connection duration in milliseconds */
+    private float $connection_duration_ms = 0.0;
 
     /**
      * Class Constructor
@@ -199,6 +215,11 @@ class Database {
      */
     public function __construct($dbname = NULL)
     {
+        $this->query_logging = filter_var(
+            getenv('DB_QUERY_LOG') ?: 'false',
+            FILTER_VALIDATE_BOOLEAN
+        );
+
         if(is_null($dbname)) {
             $database_config = database_config()['main'];
         } else {
@@ -269,9 +290,21 @@ class Database {
         );
 
         try {
+            $connect_started = microtime(true);
             $this->db = new PDO($dsn, $username, $password, $options);
+            $this->connection_duration_ms = (microtime(true) - $connect_started) * 1000;
+            self::$request_metrics['connection_count']++;
+            self::$request_metrics['connection_ms'] += $this->connection_duration_ms;
             $this->driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $instanceKey = $dbname === null ? '__main__' : (string) $dbname;
+            self::$instances[$instanceKey] = $this;
+            self::$instance = $this;
         } catch (Exception $e) {
+            if (isset($connect_started)) {
+                $this->connection_duration_ms = (microtime(true) - $connect_started) * 1000;
+                self::$request_metrics['connection_count']++;
+                self::$request_metrics['connection_ms'] += $this->connection_duration_ms;
+            }
             $error = load_class('Errors', 'kernel');
             $error->show_database_error(
                 $e->getMessage(),
@@ -290,8 +323,83 @@ class Database {
      */
     public static function instance($dbname)
     {
-        self::$instance = new Database($dbname);
+        $key = $dbname === null ? '__main__' : (string) $dbname;
+        if (!isset(self::$instances[$key])) {
+            self::$instances[$key] = new Database($dbname);
+        }
+
+        self::$instance = self::$instances[$key];
         return self::$instance;
+    }
+
+    /**
+     * Record aggregate query metrics without retaining SQL parameter values.
+     *
+     * @param string $query
+     * @param array $bindings
+     * @param float $elapsed_seconds
+     * @return void
+     */
+    private function record_query_metrics($query, $bindings, $elapsed_seconds)
+    {
+        $elapsed_ms = $elapsed_seconds * 1000;
+        self::$request_metrics['query_count']++;
+        self::$request_metrics['query_ms'] += $elapsed_ms;
+        self::$request_metrics['query_max_ms'] = max(
+            self::$request_metrics['query_max_ms'],
+            $elapsed_ms
+        );
+
+        if ($elapsed_ms >= 100) {
+            $normalized = preg_replace('/\s+/', ' ', trim($query));
+            $operation = strtoupper(strtok($normalized, ' ') ?: 'OTHER');
+            $table = 'unknown';
+            if (preg_match('/\b(?:FROM|JOIN|UPDATE|INTO)\s+`?([a-zA-Z0-9_]+)/i', $query, $match)) {
+                $table = $match[1];
+            }
+
+            $slowQuery = [
+                'fingerprint' => substr(hash('sha256', $normalized), 0, 12),
+                'operation'   => $operation,
+                'table'       => $table,
+                'duration_ms' => round($elapsed_ms, 2),
+            ];
+            self::$request_metrics['slow_queries'][] = $slowQuery;
+            usort(
+                self::$request_metrics['slow_queries'],
+                static fn ($left, $right) => $right['duration_ms'] <=> $left['duration_ms']
+            );
+            self::$request_metrics['slow_queries'] = array_slice(
+                self::$request_metrics['slow_queries'],
+                0,
+                5
+            );
+        }
+
+        if ($this->query_logging) {
+            $this->query_log[] = [
+                'query'    => $query,
+                'bindings' => $bindings,
+                'time'     => round($elapsed_seconds, 5),
+            ];
+        }
+    }
+
+    /**
+     * Return aggregate per-request database timings for diagnostics.
+     *
+     * @return array
+     */
+    public function get_performance_metrics()
+    {
+        return [
+            'connection_count' => self::$request_metrics['connection_count'],
+            'connection_ms'    => round(self::$request_metrics['connection_ms'], 2),
+            'query_count'      => self::$request_metrics['query_count'],
+            'query_ms'         => round(self::$request_metrics['query_ms'], 2),
+            'query_max_ms'     => round(self::$request_metrics['query_max_ms'], 2),
+            'slow_queries'     => self::$request_metrics['slow_queries'],
+        ];
     }
     
     /**
@@ -371,20 +479,13 @@ class Database {
         $this->bind_values = $args;
         try
         {     
-            $stmt = $this->db->prepare($query);
             $t_start = microtime(true);
+            $stmt = $this->db->prepare($query);
             $stmt->execute($this->bind_values);
             $t_elapsed = microtime(true) - $t_start;
             
             $this->last_id_inserted = $this->db->lastInsertId();
-            
-            if ($this->query_logging) {
-                $this->query_log[] = [
-                    'query'    => $query,
-                    'bindings' => $args,
-                    'time'     => round($t_elapsed, 5),
-                ];
-            }
+            $this->record_query_metrics($query, $args, $t_elapsed);
             return $stmt;
         } catch (Exception $e) {
             $error = load_class('Errors', 'kernel');
@@ -408,19 +509,11 @@ class Database {
         $this->get_sql = $this->sql;
 
         try {
-            $stmt = $this->db->prepare($this->sql);
-
             $t_start = microtime(true);
+            $stmt = $this->db->prepare($this->sql);
             $stmt->execute($this->bind_values);
             $t_elapsed = microtime(true) - $t_start;
-
-            if ($this->query_logging) {
-                $this->query_log[] = [
-                    'query'    => $this->sql,
-                    'bindings' => $this->bind_values,
-                    'time'     => round($t_elapsed, 5),
-                ];
-            }
+            $this->record_query_metrics($this->sql, $this->bind_values, $t_elapsed);
             
             if (stripos($this->sql, 'INSERT') === 0) {
                 $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
@@ -1414,18 +1507,11 @@ class Database {
         $this->build_query();
         $this->get_sql = $this->sql;
         try {
-            $stmt    = $this->db->prepare($this->sql);
             $t_start = microtime(true);
+            $stmt    = $this->db->prepare($this->sql);
             $stmt->execute($this->bind_values);
             $t_elapsed = microtime(true) - $t_start;
-
-            if ($this->query_logging) {
-                $this->query_log[] = [
-                    'query'    => $this->sql,
-                    'bindings' => $this->bind_values,
-                    'time'     => round($t_elapsed, 5),
-                ];
-            }
+            $this->record_query_metrics($this->sql, $this->bind_values, $t_elapsed);
             $this->row_count = $stmt->rowCount();
             return $stmt->fetch($mode, ...$args);
         } catch (Exception $e) {
@@ -1451,18 +1537,11 @@ class Database {
         $this->build_query();
         $this->get_sql = $this->sql;
         try {
-            $stmt    = $this->db->prepare($this->sql);
             $t_start = microtime(true);
+            $stmt    = $this->db->prepare($this->sql);
             $stmt->execute($this->bind_values);
             $t_elapsed = microtime(true) - $t_start;
-
-            if ($this->query_logging) {
-                $this->query_log[] = [
-                    'query'    => $this->sql,
-                    'bindings' => $this->bind_values,
-                    'time'     => round($t_elapsed, 5),
-                ];
-            }
+            $this->record_query_metrics($this->sql, $this->bind_values, $t_elapsed);
             $this->row_count = $stmt->rowCount();
             return $stmt->fetchAll($mode, ...$args);
         } catch (Exception $e) {

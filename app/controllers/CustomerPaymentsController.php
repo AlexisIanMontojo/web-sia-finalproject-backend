@@ -55,7 +55,7 @@ class CustomerPaymentsController extends Controller
     {
         $this->api->require_method('GET');
 
-        $r = $this->reservations->findOwned((int) $id, $this->currentUserId());
+        $r = $this->reservations->findOwnedWithFinancials((int) $id, $this->currentUserId());
         if (!$r) {
             $this->api->respond_error('Reservation not found.', 404);
         }
@@ -65,9 +65,9 @@ class CustomerPaymentsController extends Controller
             $this->payments->syncPendingInvoices((int) $r['id'], $externalId);
         }
         $reservationTotal = (float) $r['total_amount'];
-        $reservationPaid  = $this->payments->paidReservationTotal((int) $r['id']);
-        $serviceTotal = $this->serviceRequests->totalForReservation((int) $r['id']);
-        $servicePaid  = $this->serviceRequests->paidTotalForReservation((int) $r['id']);
+        $reservationPaid  = (float) $r['reservation_paid'];
+        $serviceTotal = (float) $r['service_total'];
+        $servicePaid  = (float) $r['service_paid'];
         $total = round($reservationTotal + $serviceTotal, 2);
         $paid = round($reservationPaid + $servicePaid, 2);
         $open  = in_array($r['status'], ['pending', 'confirmed', 'checked_in', 'checked_out'], true);

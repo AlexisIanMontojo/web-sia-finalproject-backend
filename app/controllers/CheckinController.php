@@ -73,7 +73,23 @@ class CheckinController extends Controller
         $note    = trim((string) ($in['notes'] ?? '')) ?: null;
 
         $result = $this->reservations->transition(
-            (int) $id, 'confirmed', 'checked_in', $adminId, 'Checked in', []
+            (int) $id,
+            'confirmed',
+            'checked_in',
+            $adminId,
+            'Checked in',
+            [],
+            function () use ($id, $adminId, $note) {
+                $recordId = $this->records->insert([
+                    'reservation_id' => (int) $id,
+                    'checked_in_by'  => $adminId,
+                    'checked_in_at'  => $this->now(),
+                    'checkin_notes'  => $note,
+                ]);
+                if (!$recordId) {
+                    throw new \RuntimeException('Unable to record guest check-in.');
+                }
+            }
         );
         if ($result === 'stale') {
             $this->api->respond_error('This reservation changed. Refresh and try again.', 409);
@@ -81,13 +97,6 @@ class CheckinController extends Controller
         if (!$result) {
             $this->api->respond_error('Could not check in. Try again.', 500);
         }
-
-        $this->records->insert([
-            'reservation_id'  => (int) $id,
-            'checked_in_by'   => $adminId,
-            'checked_in_at'   => $this->now(),
-            'checkin_notes'   => $note,
-        ]);
 
         $this->api->respond(['success' => true, 'message' => 'Guest checked in.']);
     }
@@ -136,26 +145,28 @@ class CheckinController extends Controller
         $result = $this->reservations->transition(
             (int) $id, 'checked_in', 'checked_out', $adminId,
             $early ? 'Checked out early: ' . $reason : 'Checked out',
-            $extra
+            $extra,
+            function () use ($id, $adminId, $early, $reason, $note) {
+                $record = $this->records->forReservation((int) $id);
+                $payload = [
+                    'checked_out_by' => $adminId,
+                    'checked_out_at' => $this->now(),
+                    'checkout_notes' => trim(($early ? "Early departure: {$reason}. " : '') . (string) $note) ?: null,
+                ];
+
+                $saved = $record
+                    ? $this->records->update((int) $record['id'], $payload)
+                    : $this->records->insert(array_merge(['reservation_id' => (int) $id], $payload));
+                if (!$saved) {
+                    throw new \RuntimeException('Unable to record guest check-out.');
+                }
+            }
         );
         if ($result === 'stale') {
             $this->api->respond_error('This reservation changed. Refresh and try again.', 409);
         }
         if (!$result) {
             $this->api->respond_error('Could not check out. Try again.', 500);
-        }
-
-        $record = $this->records->forReservation((int) $id);
-        $payload = [
-            'checked_out_by' => $adminId,
-            'checked_out_at' => date('Y-m-d H:i:s'),
-            'checkout_notes' => trim(($early ? "Early departure: {$reason}. " : '') . (string) $note) ?: null,
-        ];
-
-        if ($record) {
-            $this->records->update((int) $record['id'], $payload);
-        } else {
-            $this->records->insert(array_merge(['reservation_id' => (int) $id], $payload));
         }
 
         $this->api->respond([

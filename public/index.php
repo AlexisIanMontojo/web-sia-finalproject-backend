@@ -1,5 +1,47 @@
 <?php
 define('PREVENT_DIRECT_ACCESS', TRUE);
+define('APP_REQUEST_STARTED_AT', microtime(true));
+
+register_shutdown_function(static function () {
+    $requestPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+    if (strpos($requestPath, '/api/') !== 0) {
+        return;
+    }
+
+    $route = preg_replace('~/[0-9]+(?=/|$)~', '/{id}', $requestPath);
+    $route = preg_replace('~/[a-f0-9-]{24,}(?=/|$)~i', '/{id}', $route);
+    $status = http_response_code();
+    $metrics = [
+        'connection_count' => 0,
+        'connection_ms'    => 0,
+        'query_count'      => 0,
+        'query_ms'         => 0,
+        'query_max_ms'     => 0,
+        'slow_queries'     => [],
+    ];
+
+    if (function_exists('lava_instance')) {
+        $controller = lava_instance();
+        $db = is_object($controller) ? ($controller->properties['db'] ?? null) : null;
+        if (is_object($db) && method_exists($db, 'get_performance_metrics')) {
+            $metrics = $db->get_performance_metrics();
+        }
+    }
+
+    error_log('api_performance ' . json_encode([
+        'method'        => strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET'),
+        'route'         => $route,
+        'status'        => is_int($status) ? $status : 200,
+        'duration_ms'   => round((microtime(true) - APP_REQUEST_STARTED_AT) * 1000, 2),
+        'connection_count' => $metrics['connection_count'],
+        'connection_ms' => $metrics['connection_ms'],
+        'query_count'   => $metrics['query_count'],
+        'query_ms'      => $metrics['query_ms'],
+        'query_max_ms'  => $metrics['query_max_ms'],
+        'slow_queries'  => $metrics['slow_queries'],
+    ], JSON_UNESCAPED_SLASHES));
+});
+
 /**
  * ------------------------------------------------------------------
  * LavaLust - an opensource lightweight PHP MVC Framework

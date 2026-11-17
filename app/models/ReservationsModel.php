@@ -184,6 +184,38 @@ class ReservationsModel extends Model
         return $rows[0] ?? null;
     }
 
+    public function findOwnedWithFinancials($id, $userId)
+    {
+        $rows = $this->db->raw(
+            "SELECT r.*,
+                    COALESCE((
+                        SELECT SUM(rs.total_amount)
+                        FROM reservation_services rs
+                        WHERE rs.reservation_id = r.id AND rs.status <> 'cancelled'
+                    ), 0) AS service_total,
+                    COALESCE((
+                        SELECT SUM(rs.total_amount)
+                        FROM reservation_services rs
+                        WHERE rs.reservation_id = r.id
+                          AND rs.status <> 'cancelled'
+                          AND rs.billing_status = 'paid'
+                    ), 0) AS service_paid,
+                    COALESCE((
+                        SELECT SUM(p.amount)
+                        FROM reservation_payments p
+                        WHERE p.reservation_id = r.id
+                          AND p.status = 'paid'
+                          AND p.kind <> 'service'
+                    ), 0) AS reservation_paid
+             FROM reservations r
+             WHERE r.id = ? AND r.user_id = ?
+             LIMIT 1",
+            [(int) $id, (int) $userId]
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        return $rows[0] ?? null;
+    }
+
     public function cancelOwned($id, $userId, $reason)
     {
         $this->transaction();
@@ -283,16 +315,15 @@ class ReservationsModel extends Model
         $this->transaction();
 
         try {
-            $rows = $this->db->raw(
-                'SELECT status FROM reservations WHERE id = ? FOR UPDATE',
-                [(int) $id]
-            )->fetchAll(PDO::FETCH_ASSOC);
-            if (!$rows || $rows[0]['status'] !== $from) {
+            $updated = $this->db->table($this->table)
+                ->where('id', (int) $id)
+                ->where('status', $from)
+                ->update(array_merge(['status' => $to], $extra));
+            if (!$updated) {
                 $this->rollback();
                 return 'stale';
             }
 
-            $this->update((int) $id, array_merge(['status' => $to], $extra));
             $this->addHistory($id, $from, $to, $adminId, $remarks);
             $this->commit();
             return true;
@@ -320,22 +351,31 @@ class ReservationsModel extends Model
     }
 
         /** Moves a reservation to a new status and records the change in one transaction. */
-    public function transition($id, $from, $to, $adminId, $remarks, array $extra = [])
-    {
+    public function transition(
+        $id,
+        $from,
+        $to,
+        $adminId,
+        $remarks,
+        array $extra = [],
+        ?callable $afterTransition = null
+    ) {
         $this->transaction();
 
         try {
-            $rows = $this->db->raw(
-                'SELECT status FROM reservations WHERE id = ? FOR UPDATE',
-                [(int) $id]
-            )->fetchAll(PDO::FETCH_ASSOC);
-            if (!$rows || $rows[0]['status'] !== $from) {
+            $updated = $this->db->table($this->table)
+                ->where('id', (int) $id)
+                ->where('status', $from)
+                ->update(array_merge(['status' => $to], $extra));
+            if (!$updated) {
                 $this->rollback();
                 return 'stale';
             }
 
-            $this->update((int) $id, array_merge(['status' => $to], $extra));
             $this->addHistory($id, $from, $to, $adminId, $remarks);
+            if ($afterTransition !== null) {
+                $afterTransition();
+            }
             $this->commit();
             return true;
         } catch (\Throwable $e) {
