@@ -27,6 +27,74 @@ class ReservationServicesModel extends Model
         )->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    public function totalForReservation($reservationId)
+    {
+        $row = $this->db->raw(
+            "SELECT COALESCE(SUM(total_amount), 0) AS total
+             FROM reservation_services
+             WHERE reservation_id = ? AND status <> 'cancelled'",
+            [(int) $reservationId]
+        )->fetch(PDO::FETCH_ASSOC);
+
+        return (float) ($row['total'] ?? 0);
+    }
+
+    public function paidTotalForReservation($reservationId)
+    {
+        $row = $this->db->raw(
+            "SELECT COALESCE(SUM(total_amount), 0) AS total
+             FROM reservation_services
+             WHERE reservation_id = ?
+               AND status <> 'cancelled'
+               AND billing_status = 'paid'",
+            [(int) $reservationId]
+        )->fetch(PDO::FETCH_ASSOC);
+
+        return (float) ($row['total'] ?? 0);
+    }
+
+    public function findByIdempotencyKey($key)
+    {
+        $rows = $this->db->raw(
+            'SELECT rs.*, sc.name, sc.category, sc.unit, r.user_id
+             FROM reservation_service_requests req
+             INNER JOIN reservation_services rs ON rs.id = req.reservation_service_id
+             INNER JOIN service_catalog sc ON sc.id = rs.service_id
+             INNER JOIN reservations r ON r.id = rs.reservation_id
+             WHERE req.idempotency_key = ?
+             LIMIT 1',
+            [(string) $key]
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        return $rows[0] ?? null;
+    }
+
+    public function acquireIdempotencyLock($key)
+    {
+        $lockName = 'hotel-service-request-' . substr(hash('sha256', (string) $key), 0, 40);
+        $row = $this->db->raw('SELECT GET_LOCK(?, 5) AS acquired', [$lockName])
+            ->fetch(PDO::FETCH_ASSOC);
+
+        return (int) ($row['acquired'] ?? 0) === 1;
+    }
+
+    public function releaseIdempotencyLock($key)
+    {
+        $lockName = 'hotel-service-request-' . substr(hash('sha256', (string) $key), 0, 40);
+        $this->db->raw('SELECT RELEASE_LOCK(?)', [$lockName]);
+    }
+
+    public function recordIdempotencyKey($key, $serviceRequestId)
+    {
+        $saved = $this->db->table('reservation_service_requests')->insert([
+            'idempotency_key'      => (string) $key,
+            'reservation_service_id' => (int) $serviceRequestId,
+        ]);
+        if (!$saved) {
+            throw new \RuntimeException('Unable to record the service request key.');
+        }
+    }
+
     /** One request, only if it belongs to the signed-in guest. */
     public function findOwned($id, $userId)
     {

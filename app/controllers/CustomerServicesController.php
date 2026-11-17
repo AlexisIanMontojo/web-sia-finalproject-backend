@@ -139,11 +139,35 @@ class CustomerServicesController extends Controller
             $this->api->respond_error('Reservation not found.', 404);
         }
 
+        $in = $this->api->body();
+        $idempotencyKey = strtolower(trim((string) ($in['idempotency_key'] ?? '')));
+        if (!preg_match(
+            '/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/',
+            $idempotencyKey
+        )) {
+            $this->api->respond_error('A valid request key is required. Please retry the request.', 422);
+        }
+
+        $existing = $this->requests->findByIdempotencyKey($idempotencyKey);
+        if ($existing) {
+            if (
+                (int) $existing['reservation_id'] !== (int) $reservation['id']
+                || (int) $existing['user_id'] !== $userId
+            ) {
+                $this->api->respond_error('This request key has already been used.', 409);
+            }
+
+            $this->api->respond([
+                'success' => true,
+                'message' => 'Request was already recorded.',
+                'data'    => $this->shapeRequest($existing),
+            ]);
+        }
+
         if (!$this->isOpenStay($reservation)) {
             $this->api->respond_error('This stay is no longer open for extra services.', 409);
         }
 
-        $in        = $this->api->body();
         $serviceId = (int) ($in['service_id'] ?? 0);
         $quantity  = round((float) ($in['quantity'] ?? 1), 2);
         $when      = trim((string) ($in['scheduled_at'] ?? ''));
@@ -214,19 +238,59 @@ class CustomerServicesController extends Controller
 
         $unitPrice = (float) $service['price'];
 
-        $newId = $this->requests->insert([
-            'reservation_id' => (int) $reservation['id'],
-            'service_id'     => (int) $service['id'],
-            'quantity'       => $quantity,
-            'unit_price'     => $unitPrice,
-            'total_amount'   => round($unitPrice * $quantity, 2),
-            'scheduled_at'   => $startStr,
-            'ends_at'        => $endStr,
-            'notes'          => $notes,
-            'status'         => 'requested',
-            'billing_status' => 'unpaid',
-            'billed_at'      => null,
-        ]);
+        if (!$this->requests->acquireIdempotencyLock($idempotencyKey)) {
+            $this->api->respond_error('This request is being processed. Please try again shortly.', 409);
+        }
+
+        $creationFailed = false;
+        try {
+            $existing = $this->requests->findByIdempotencyKey($idempotencyKey);
+            if ($existing) {
+                $this->requests->releaseIdempotencyLock($idempotencyKey);
+                if (
+                    (int) $existing['reservation_id'] !== (int) $reservation['id']
+                    || (int) $existing['user_id'] !== $userId
+                ) {
+                    $this->api->respond_error('This request key has already been used.', 409);
+                }
+
+                $this->api->respond([
+                    'success' => true,
+                    'message' => 'Request was already recorded.',
+                    'data'    => $this->shapeRequest($existing),
+                ]);
+            }
+
+            $this->requests->transaction();
+            $newId = $this->requests->insert([
+                'reservation_id' => (int) $reservation['id'],
+                'service_id'     => (int) $service['id'],
+                'quantity'       => $quantity,
+                'unit_price'     => $unitPrice,
+                'total_amount'   => round($unitPrice * $quantity, 2),
+                'scheduled_at'   => $startStr,
+                'ends_at'        => $endStr,
+                'notes'          => $notes,
+                'status'         => 'requested',
+                'billing_status' => 'unpaid',
+                'billed_at'      => null,
+            ]);
+            if (!$newId) {
+                throw new \RuntimeException('Unable to create the service request.');
+            }
+            $this->requests->recordIdempotencyKey($idempotencyKey, (int) $newId);
+            $this->requests->commit();
+        } catch (\Throwable $e) {
+            $this->requests->rollback();
+            error_log('Service request creation failed: ' . get_class($e) . ': ' . $e->getMessage());
+            $creationFailed = true;
+        } finally {
+            $this->requests->releaseIdempotencyLock($idempotencyKey);
+        }
+
+        if ($creationFailed || empty($newId)) {
+            $this->api->respond_error('Unable to create the service request. Please try again.', 500);
+        }
 
         $row             = $this->requests->findOwned((int) $newId, $userId);
         $row['name']     = $service['name'];

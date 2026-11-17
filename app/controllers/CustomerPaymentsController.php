@@ -64,8 +64,12 @@ class CustomerPaymentsController extends Controller
         if ($externalId !== '') {
             $this->payments->syncPendingInvoices((int) $r['id'], $externalId);
         }
-        $total = (float) $r['total_amount'];
-        $paid  = $this->payments->paidReservationTotal((int) $r['id']);
+        $reservationTotal = (float) $r['total_amount'];
+        $reservationPaid  = $this->payments->paidReservationTotal((int) $r['id']);
+        $serviceTotal = $this->serviceRequests->totalForReservation((int) $r['id']);
+        $servicePaid  = $this->serviceRequests->paidTotalForReservation((int) $r['id']);
+        $total = round($reservationTotal + $serviceTotal, 2);
+        $paid = round($reservationPaid + $servicePaid, 2);
         $open  = in_array($r['status'], ['pending', 'confirmed', 'checked_in', 'checked_out'], true);
 
         $this->api->respond([
@@ -73,8 +77,16 @@ class CustomerPaymentsController extends Controller
             'total'          => $total,
             'paid'           => $paid,
             'balance'        => max(0, round($total - $paid, 2)),
+            'reservation_total'   => $reservationTotal,
+            'reservation_paid'    => $reservationPaid,
+            'reservation_balance' => max(0, round($reservationTotal - $reservationPaid, 2)),
+            'service_total'       => $serviceTotal,
+            'service_paid'        => $servicePaid,
+            'service_balance'     => max(0, round($serviceTotal - $servicePaid, 2)),
             'open'           => $open,
-            'downpayment_due' => ($open && $paid <= 0) ? $this->depositFor($total) : 0,
+            'downpayment_due' => ($open && $reservationPaid <= 0)
+                ? $this->depositFor($reservationTotal)
+                : 0,
             'data'           => array_map(
                 [$this, 'shapePayment'],
                 $this->payments->forReservation((int) $r['id'])

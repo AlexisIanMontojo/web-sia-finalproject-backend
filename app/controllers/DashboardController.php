@@ -8,6 +8,7 @@ class DashboardController extends Controller
         parent::__construct();
         $this->call->model('RoomsModel', 'rooms');
         $this->call->model('UsersModel', 'usersModel');
+        $this->call->model('AdminReportsModel', 'reports');
     }
 
     public function stats()
@@ -35,6 +36,27 @@ class DashboardController extends Controller
             ],
             $this->rooms->dashboardCategoryCounts()
         );
+        $overview = $this->reports->dashboardOverview();
+        $reservationCounts = $overview['reservations'];
+        $monthStart = (new DateTimeImmutable('first day of this month'))->modify('-11 months');
+        $from = $monthStart->format('Y-m-d');
+        $toExclusive = (new DateTimeImmutable('tomorrow'))->format('Y-m-d');
+
+        $monthlyReservations = [];
+        foreach ($this->reports->monthlyReservations($from, $toExclusive) as $row) {
+            $monthlyReservations[$row['month']] = (int) $row['total'];
+        }
+        $monthlyRevenue = $this->reports->monthlyPayments($from, $toExclusive);
+        $trendLabels = [];
+        $reservationTrend = [];
+        $revenueTrend = [];
+        for ($offset = 0; $offset < 12; $offset++) {
+            $month = $monthStart->modify("+{$offset} months");
+            $key = $month->format('Y-m');
+            $trendLabels[] = $month->format('M y');
+            $reservationTrend[] = $monthlyReservations[$key] ?? 0;
+            $revenueTrend[] = round($monthlyRevenue[$key] ?? 0, 2);
+        }
 
         $this->api->respond([
             'success' => true,
@@ -45,13 +67,24 @@ class DashboardController extends Controller
                 'maintenance_rooms'    => $statusCounts['maintenance'] ?? 0,
                 'room_categories'      => count($byCategory),
                 'registered_customers' => $this->usersModel->countCustomers(),
-                // Reservations and payments are built in a later batch.
-                'total_reservations'   => null,
-                'pending_reservations' => null,
-                'revenue'              => null,
+                'total_reservations'   => $reservationCounts['total_reservations'] ?? 0,
+                'pending_reservations' => $reservationCounts['pending_reservations'] ?? 0,
+                'confirmed_reservations' => $reservationCounts['confirmed_reservations'] ?? 0,
+                'checked_in_reservations' => $reservationCounts['checked_in_reservations'] ?? 0,
+                'checked_out_reservations' => $reservationCounts['checked_out_reservations'] ?? 0,
+                'cancelled_reservations' => $reservationCounts['cancelled_reservations'] ?? 0,
+                'rejected_reservations' => $reservationCounts['rejected_reservations'] ?? 0,
+                'revenue'              => $overview['revenue'],
             ],
             'rooms_by_status'   => $byStatus,
             'rooms_by_category' => $byCategory,
+            'trends' => [
+                'labels' => $trendLabels,
+                'reservations' => $reservationTrend,
+                'revenue' => $revenueTrend,
+            ],
+            'recent_reservations' => $this->reports->recentReservations(),
+            'recent_payments' => $this->reports->recentPayments(),
         ]);
     }
 }

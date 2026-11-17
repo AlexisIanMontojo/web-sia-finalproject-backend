@@ -72,9 +72,13 @@ class CheckinController extends Controller
         $in      = $this->api->body();
         $note    = trim((string) ($in['notes'] ?? '')) ?: null;
 
-        if (!$this->reservations->transition(
+        $result = $this->reservations->transition(
             (int) $id, 'confirmed', 'checked_in', $adminId, 'Checked in', []
-        )) {
+        );
+        if ($result === 'stale') {
+            $this->api->respond_error('This reservation changed. Refresh and try again.', 409);
+        }
+        if (!$result) {
             $this->api->respond_error('Could not check in. Try again.', 500);
         }
 
@@ -129,11 +133,15 @@ class CheckinController extends Controller
         // An early departure ends the stay today, so the room is released for the unused nights.
         $extra = $early ? ['check_out_date' => $today, 'cancellation_reason' => 'Early departure: ' . $reason] : [];
 
-        if (!$this->reservations->transition(
+        $result = $this->reservations->transition(
             (int) $id, 'checked_in', 'checked_out', $adminId,
             $early ? 'Checked out early: ' . $reason : 'Checked out',
             $extra
-        )) {
+        );
+        if ($result === 'stale') {
+            $this->api->respond_error('This reservation changed. Refresh and try again.', 409);
+        }
+        if (!$result) {
             $this->api->respond_error('Could not check out. Try again.', 500);
         }
 

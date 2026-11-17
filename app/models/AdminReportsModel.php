@@ -6,6 +6,76 @@ class AdminReportsModel extends Model
     protected $table = 'reservations';
     protected $primary_key = 'id';
 
+    public function dashboardOverview()
+    {
+        $row = $this->db->raw(
+            "SELECT COUNT(*) AS total_reservations,
+                    COALESCE(SUM(status = 'pending'), 0) AS pending_reservations,
+                    COALESCE(SUM(status = 'confirmed'), 0) AS confirmed_reservations,
+                    COALESCE(SUM(status = 'checked_in'), 0) AS checked_in_reservations,
+                    COALESCE(SUM(status = 'checked_out'), 0) AS checked_out_reservations,
+                    COALESCE(SUM(status = 'cancelled'), 0) AS cancelled_reservations,
+                    COALESCE(SUM(status = 'rejected'), 0) AS rejected_reservations
+             FROM reservations"
+        )->fetch(PDO::FETCH_ASSOC);
+
+        $payments = $this->db->raw(
+            "SELECT COALESCE(SUM(amount), 0) AS total
+             FROM reservation_payments
+             WHERE status = 'paid'"
+        )->fetch(PDO::FETCH_ASSOC);
+
+        $manuallyPaidServices = $this->db->raw(
+            "SELECT COALESCE(SUM(rs.total_amount), 0) AS total
+             FROM reservation_services rs
+             WHERE rs.billing_status = 'paid'
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM reservation_payment_services ps
+                   INNER JOIN reservation_payments p ON p.id = ps.payment_id
+                   WHERE ps.reservation_service_id = rs.id
+                     AND p.kind = 'service' AND p.status = 'paid'
+               )"
+        )->fetch(PDO::FETCH_ASSOC);
+
+        return [
+            'reservations' => array_map('intval', $row ?: []),
+            'revenue' => (float) ($payments['total'] ?? 0)
+                + (float) ($manuallyPaidServices['total'] ?? 0),
+        ];
+    }
+
+    public function recentReservations($limit = 5)
+    {
+        $limit = max(1, min(10, (int) $limit));
+
+        return $this->db->raw(
+            'SELECT r.reservation_code, r.status, r.check_in_date, r.check_out_date,
+                    r.created_at, u.username AS guest_name, rm.room_number
+             FROM reservations r
+             INNER JOIN users u ON u.id = r.user_id
+             INNER JOIN rooms rm ON rm.id = r.room_id
+             ORDER BY r.created_at DESC, r.id DESC
+             LIMIT ' . $limit
+        )->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function recentPayments($limit = 5)
+    {
+        $limit = max(1, min(10, (int) $limit));
+
+        return $this->db->raw(
+            'SELECT p.id, p.kind, p.provider, p.amount, p.status, p.created_at, p.paid_at,
+                    r.reservation_code, u.username AS guest_name, rm.room_number
+             FROM reservation_payments p
+             INNER JOIN reservations r ON r.id = p.reservation_id
+             INNER JOIN users u ON u.id = r.user_id
+             INNER JOIN rooms rm ON rm.id = r.room_id
+             ORDER BY p.created_at DESC, p.id DESC
+             LIMIT ' . $limit
+        )->fetchAll(PDO::FETCH_ASSOC);
+    }
+
     public function overview($from, $toExclusive)
     {
         $row = $this->db->raw(

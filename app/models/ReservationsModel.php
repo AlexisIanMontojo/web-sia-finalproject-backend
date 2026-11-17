@@ -82,6 +82,21 @@ class ReservationsModel extends Model
         return (int) $busy === 0;
     }
 
+    public function acquireRoomLock($roomId)
+    {
+        $lockName = 'hotel-room-booking-' . (int) $roomId;
+        $row = $this->db->raw('SELECT GET_LOCK(?, 5) AS acquired', [$lockName])
+            ->fetch(PDO::FETCH_ASSOC);
+
+        return (int) ($row['acquired'] ?? 0) === 1;
+    }
+
+    public function releaseRoomLock($roomId)
+    {
+        $lockName = 'hotel-room-booking-' . (int) $roomId;
+        $this->db->raw('SELECT RELEASE_LOCK(?)', [$lockName]);
+    }
+
     /** Active, available rooms of a type that fit the guests and are free for the dates. */
     public function availableRooms($categoryId, $checkIn, $checkOut, $guests)
     {
@@ -131,10 +146,32 @@ class ReservationsModel extends Model
 
     public function forUser($userId)
     {
-        return $this->db->table($this->table)
-            ->where('user_id', (int) $userId)
-            ->order_by('check_in_date', 'DESC')
-            ->get_all();
+        return $this->db->raw(
+            "SELECT r.*,
+                    COALESCE((
+                        SELECT SUM(rs.total_amount)
+                        FROM reservation_services rs
+                        WHERE rs.reservation_id = r.id AND rs.status <> 'cancelled'
+                    ), 0) AS service_total,
+                    COALESCE((
+                        SELECT SUM(rs.total_amount)
+                        FROM reservation_services rs
+                        WHERE rs.reservation_id = r.id
+                          AND rs.status <> 'cancelled'
+                          AND rs.billing_status = 'paid'
+                    ), 0) AS service_paid,
+                    COALESCE((
+                        SELECT SUM(p.amount)
+                        FROM reservation_payments p
+                        WHERE p.reservation_id = r.id
+                          AND p.status = 'paid'
+                          AND p.kind <> 'service'
+                    ), 0) AS reservation_paid
+             FROM reservations r
+             WHERE r.user_id = ?
+             ORDER BY r.check_in_date DESC",
+            [(int) $userId]
+        )->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function findOwned($id, $userId)
@@ -145,6 +182,49 @@ class ReservationsModel extends Model
             ->get_all();
 
         return $rows[0] ?? null;
+    }
+
+    public function cancelOwned($id, $userId, $reason)
+    {
+        $this->transaction();
+
+        try {
+            $rows = $this->db->raw(
+                'SELECT *
+                 FROM reservations
+                 WHERE id = ? AND user_id = ?
+                 FOR UPDATE',
+                [(int) $id, (int) $userId]
+            )->fetchAll(PDO::FETCH_ASSOC);
+            $reservation = $rows[0] ?? null;
+
+            if (!$reservation) {
+                $this->rollback();
+                return 'not_found';
+            }
+            if (!self::isCancellable($reservation)) {
+                $this->rollback();
+                return 'not_cancellable';
+            }
+
+            $this->update((int) $id, [
+                'status'              => 'cancelled',
+                'cancellation_reason' => $reason,
+            ]);
+            $this->addHistory(
+                (int) $id,
+                $reservation['status'],
+                'cancelled',
+                (int) $userId,
+                $reason
+            );
+            $this->commit();
+            return true;
+        } catch (\Throwable $e) {
+            $this->rollback();
+            error_log('Reservation cancellation failed: ' . get_class($e) . ': ' . $e->getMessage());
+            return false;
+        }
     }
 
     public function addHistory($reservationId, $oldStatus, $newStatus, $userId, $remarks)
@@ -161,12 +241,31 @@ class ReservationsModel extends Model
         /** Reservations for the admin list, with room, category, and guest details. */
     public function allForAdmin($status = '')
     {
-        $sql = 'SELECT r.*, rm.room_number, c.name AS category_name,
-                       u.username, u.email
+        $sql = "SELECT r.*, rm.room_number, c.name AS category_name,
+                       u.username, u.email,
+                       COALESCE((
+                           SELECT SUM(rs.total_amount)
+                           FROM reservation_services rs
+                           WHERE rs.reservation_id = r.id AND rs.status <> 'cancelled'
+                       ), 0) AS service_total,
+                       COALESCE((
+                           SELECT SUM(rs.total_amount)
+                           FROM reservation_services rs
+                           WHERE rs.reservation_id = r.id
+                             AND rs.status <> 'cancelled'
+                             AND rs.billing_status = 'paid'
+                       ), 0) AS service_paid,
+                       COALESCE((
+                           SELECT SUM(p.amount)
+                           FROM reservation_payments p
+                           WHERE p.reservation_id = r.id
+                             AND p.status = 'paid'
+                             AND p.kind <> 'service'
+                       ), 0) AS reservation_paid
                 FROM reservations r
                 INNER JOIN rooms rm ON rm.id = r.room_id
                 INNER JOIN room_categories c ON c.id = rm.category_id
-                INNER JOIN users u ON u.id = r.user_id';
+                INNER JOIN users u ON u.id = r.user_id";
 
         $params = [];
         if ($status !== '') {
@@ -184,6 +283,15 @@ class ReservationsModel extends Model
         $this->transaction();
 
         try {
+            $rows = $this->db->raw(
+                'SELECT status FROM reservations WHERE id = ? FOR UPDATE',
+                [(int) $id]
+            )->fetchAll(PDO::FETCH_ASSOC);
+            if (!$rows || $rows[0]['status'] !== $from) {
+                $this->rollback();
+                return 'stale';
+            }
+
             $this->update((int) $id, array_merge(['status' => $to], $extra));
             $this->addHistory($id, $from, $to, $adminId, $remarks);
             $this->commit();
@@ -217,6 +325,15 @@ class ReservationsModel extends Model
         $this->transaction();
 
         try {
+            $rows = $this->db->raw(
+                'SELECT status FROM reservations WHERE id = ? FOR UPDATE',
+                [(int) $id]
+            )->fetchAll(PDO::FETCH_ASSOC);
+            if (!$rows || $rows[0]['status'] !== $from) {
+                $this->rollback();
+                return 'stale';
+            }
+
             $this->update((int) $id, array_merge(['status' => $to], $extra));
             $this->addHistory($id, $from, $to, $adminId, $remarks);
             $this->commit();

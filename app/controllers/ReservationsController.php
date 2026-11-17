@@ -40,6 +40,19 @@ class ReservationsController extends Controller
             'nightly_rate'        => (float) $r['nightly_rate'],
             'extra_charges'       => (float) $r['extra_charges'],
             'total_amount'        => (float) $r['total_amount'],
+            'service_total'       => (float) ($r['service_total'] ?? 0),
+            'reservation_paid'    => (float) ($r['reservation_paid'] ?? 0),
+            'service_paid'        => (float) ($r['service_paid'] ?? 0),
+            'total_due'           => round(
+                (float) $r['total_amount'] + (float) ($r['service_total'] ?? 0),
+                2
+            ),
+            'balance_due'         => max(0, round(
+                (float) $r['total_amount'] + (float) ($r['service_total'] ?? 0)
+                    - (float) ($r['reservation_paid'] ?? 0)
+                    - (float) ($r['service_paid'] ?? 0),
+                2
+            )),
             'status'              => $r['status'],
             'cancellation_reason' => $r['cancellation_reason'] ?? null,
             'cancellable'         => ReservationsModel::isCancellable($r),
@@ -132,36 +145,55 @@ class ReservationsController extends Controller
 
         $code = 'HR' . date('ymd') . strtoupper(bin2hex(random_bytes(3)));
 
-        $this->reservations->transaction();
+        if (!$this->reservations->acquireRoomLock((int) $room['id'])) {
+            $this->api->respond_error('That room is being booked. Please try again shortly.', 409);
+        }
+
+        $conflict = false;
+        $creationFailed = false;
+        $id = null;
         try {
+            $this->reservations->transaction();
             if (!$this->reservations->roomIsFree((int) $room['id'], $checkIn, $checkOut)) {
                 $this->reservations->rollback();
-                $this->api->respond([
-                    'success' => false,
-                    'message' => 'That room was just booked for these dates. Please choose another room.',
-                ], 409);
+                $conflict = true;
+            } else {
+                $id = $this->reservations->insert([
+                    'reservation_code'  => $code,
+                    'user_id'           => $userId,
+                    'room_id'           => (int) $room['id'],
+                    'check_in_date'     => $checkIn,
+                    'check_out_date'    => $checkOut,
+                    'adults'            => $guests,
+                    'children'          => 0,
+                    'special_requests'  => trim((string) ($in['special_requests'] ?? '')) ?: null,
+                    'nightly_rate'      => $quote['nightly_rate'],
+                    'extra_charges'     => $quote['extra_charges'],
+                    'total_amount'      => $quote['total'],
+                    'status'            => 'pending',
+                ]);
+                if (!$id) {
+                    throw new \RuntimeException('Unable to create the reservation.');
+                }
+
+                $this->reservations->addHistory($id, null, 'pending', $userId, 'Booked online by customer');
+                $this->reservations->commit();
             }
-
-            $id = $this->reservations->insert([
-                'reservation_code'  => $code,
-                'user_id'           => $userId,
-                'room_id'           => (int) $room['id'],
-                'check_in_date'     => $checkIn,
-                'check_out_date'    => $checkOut,
-                'adults'            => $guests,
-                'children'          => 0,
-                'special_requests'  => trim((string) ($in['special_requests'] ?? '')) ?: null,
-                'nightly_rate'      => $quote['nightly_rate'],
-                'extra_charges'     => $quote['extra_charges'],
-                'total_amount'      => $quote['total'],
-                'status'            => 'pending',
-            ]);
-
-            $this->reservations->addHistory($id, null, 'pending', $userId, 'Booked online by customer');
-            $this->reservations->commit();
         } catch (\Throwable $e) {
             $this->reservations->rollback();
             error_log('Booking failed: ' . get_class($e) . ': ' . $e->getMessage());
+            $creationFailed = true;
+        } finally {
+            $this->reservations->releaseRoomLock((int) $room['id']);
+        }
+
+        if ($conflict) {
+            $this->api->respond_error(
+                'That room was just booked for these dates. Please choose another room.',
+                409
+            );
+        }
+        if ($creationFailed || !$id) {
             $this->api->respond_error('Unable to save the booking. Please try again.', 500);
         }
 
@@ -192,17 +224,14 @@ class ReservationsController extends Controller
         $in     = $this->api->body();
         $reason = trim((string) ($in['reason'] ?? '')) ?: 'Cancelled by customer';
 
-        $this->reservations->transaction();
-        try {
-            $this->reservations->update((int) $id, [
-                'status'              => 'cancelled',
-                'cancellation_reason' => $reason,
-            ]);
-            $this->reservations->addHistory((int) $id, $reservation['status'], 'cancelled', $userId, $reason);
-            $this->reservations->commit();
-        } catch (\Throwable $e) {
-            $this->reservations->rollback();
-            error_log('Cancellation failed: ' . get_class($e) . ': ' . $e->getMessage());
+        $result = $this->reservations->cancelOwned((int) $id, $userId, $reason);
+        if ($result === 'not_found') {
+            $this->api->respond_error('Reservation not found.', 404);
+        }
+        if ($result === 'not_cancellable') {
+            $this->api->respond_error('This reservation can no longer be cancelled.', 409);
+        }
+        if (!$result) {
             $this->api->respond_error('Unable to cancel the reservation. Please try again.', 500);
         }
 

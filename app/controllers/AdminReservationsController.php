@@ -24,6 +24,19 @@ class AdminReservationsController extends Controller
             'check_out_date'      => $r['check_out_date'],
             'guests'              => (int) $r['adults'],
             'total_amount'        => (float) $r['total_amount'],
+            'service_total'       => (float) ($r['service_total'] ?? 0),
+            'reservation_paid'    => (float) ($r['reservation_paid'] ?? 0),
+            'service_paid'        => (float) ($r['service_paid'] ?? 0),
+            'total_due'           => round(
+                (float) $r['total_amount'] + (float) ($r['service_total'] ?? 0),
+                2
+            ),
+            'balance_due'         => max(0, round(
+                (float) $r['total_amount'] + (float) ($r['service_total'] ?? 0)
+                    - (float) ($r['reservation_paid'] ?? 0)
+                    - (float) ($r['service_paid'] ?? 0),
+                2
+            )),
             'status'              => $r['status'],
             'cancellation_reason' => $r['cancellation_reason'],
             'created_at'          => $r['created_at'],
@@ -59,27 +72,44 @@ class AdminReservationsController extends Controller
             $this->api->respond_error('Only pending reservations can be confirmed.', 409);
         }
 
-        // Re-check the room: a block may have been added since the booking.
-        if (!$this->reservations->roomIsFree(
-            (int) $reservation['room_id'],
-            $reservation['check_in_date'],
-            $reservation['check_out_date'],
-            (int) $id
-        )) {
-            $this->api->respond_error('The room is no longer free for these dates.', 409);
+        $roomId = (int) $reservation['room_id'];
+        if (!$this->reservations->acquireRoomLock($roomId)) {
+            $this->api->respond_error('The room is being updated. Please try again shortly.', 409);
         }
 
-        if (!$this->reservations->changeStatus(
-            (int) $id, 'pending', 'confirmed', (int) $claims['sub'], 'Confirmed by admin'
-        )) {
+        $roomUnavailable = false;
+        try {
+            // Re-check the room: a block may have been added since the booking.
+            $roomUnavailable = !$this->reservations->roomIsFree(
+                $roomId,
+                $reservation['check_in_date'],
+                $reservation['check_out_date'],
+                (int) $id
+            );
+            $result = $roomUnavailable
+                ? false
+                : $this->reservations->changeStatus(
+                    (int) $id,
+                    'pending',
+                    'confirmed',
+                    (int) $claims['sub'],
+                    'Confirmed by admin'
+                );
+        } finally {
+            $this->reservations->releaseRoomLock($roomId);
+        }
+
+        if ($roomUnavailable) {
+            $this->api->respond_error('The room is no longer free for these dates.', 409);
+        }
+        if ($result === 'stale') {
+            $this->api->respond_error('This reservation changed. Refresh and try again.', 409);
+        }
+        if (!$result) {
             $this->api->respond_error('Could not confirm the reservation. Try again.', 500);
         }
 
-        $this->api->respond([
-            'success' => true,
-            'message' => 'Reservation confirmed.',
-            'data'    => $this->shape($this->reservations->allForAdmin('')[0] ?? []),
-        ]);
+        $this->api->respond(['success' => true, 'message' => 'Reservation confirmed.']);
     }
 
     public function reject($id)
@@ -107,10 +137,14 @@ class AdminReservationsController extends Controller
             ], 422);
         }
 
-        if (!$this->reservations->changeStatus(
+        $result = $this->reservations->changeStatus(
             (int) $id, 'pending', 'rejected', (int) $claims['sub'], $reason,
             ['cancellation_reason' => $reason]
-        )) {
+        );
+        if ($result === 'stale') {
+            $this->api->respond_error('This reservation changed. Refresh and try again.', 409);
+        }
+        if (!$result) {
             $this->api->respond_error('Could not reject the reservation. Try again.', 500);
         }
 
