@@ -239,10 +239,14 @@ class ReservationsModel extends Model
                 return 'not_cancellable';
             }
 
-            $this->update((int) $id, [
+            $updated = $this->update((int) $id, [
                 'status'              => 'cancelled',
                 'cancellation_reason' => $reason,
             ]);
+            if ($updated === false) {
+                throw new \RuntimeException('Unable to update the reservation status.');
+            }
+
             $this->addHistory(
                 (int) $id,
                 $reservation['status'],

@@ -27,14 +27,13 @@ class AdminReservationsController extends Controller
             'service_total'       => (float) ($r['service_total'] ?? 0),
             'reservation_paid'    => (float) ($r['reservation_paid'] ?? 0),
             'service_paid'        => (float) ($r['service_paid'] ?? 0),
-            'total_due'           => round(
-                (float) $r['total_amount'] + (float) ($r['service_total'] ?? 0),
+            'service_balance'     => max(0, round(
+                (float) ($r['service_total'] ?? 0) - (float) ($r['service_paid'] ?? 0),
                 2
-            ),
+            )),
+            'total_due'           => (float) $r['total_amount'],
             'balance_due'         => max(0, round(
-                (float) $r['total_amount'] + (float) ($r['service_total'] ?? 0)
-                    - (float) ($r['reservation_paid'] ?? 0)
-                    - (float) ($r['service_paid'] ?? 0),
+                (float) $r['total_amount'] - (float) ($r['reservation_paid'] ?? 0),
                 2
             )),
             'status'              => $r['status'],

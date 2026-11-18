@@ -106,11 +106,14 @@ class AdminServiceRequestsController extends Controller
             $this->api->respond_error('This service is included in a pending payment.', 409);
         }
 
-        $this->requests->update((int) $id, [
+        $updated = $this->requests->update((int) $id, [
             'billing_status' => 'paid',
             'billed_at'      => date('Y-m-d H:i:s'),
         ]);
+        if ($updated === false) {
+            $this->api->respond_error('Could not confirm the cash payment. Try again.', 500);
+        }
 
-        $this->api->respond(['success' => true, 'message' => 'Marked as paid.']);
+        $this->api->respond(['success' => true, 'message' => 'Cash payment confirmed.']);
     }
 }

@@ -68,21 +68,21 @@ class CustomerPaymentsController extends Controller
         $reservationPaid  = (float) $r['reservation_paid'];
         $serviceTotal = (float) $r['service_total'];
         $servicePaid  = (float) $r['service_paid'];
-        $total = round($reservationTotal + $serviceTotal, 2);
-        $paid = round($reservationPaid + $servicePaid, 2);
+        $reservationBalance = max(0, round($reservationTotal - $reservationPaid, 2));
+        $serviceBalance = max(0, round($serviceTotal - $servicePaid, 2));
         $open  = in_array($r['status'], ['pending', 'confirmed', 'checked_in', 'checked_out'], true);
 
         $this->api->respond([
             'success'        => true,
-            'total'          => $total,
-            'paid'           => $paid,
-            'balance'        => max(0, round($total - $paid, 2)),
+            'total'          => $reservationTotal,
+            'paid'           => $reservationPaid,
+            'balance'        => $reservationBalance,
             'reservation_total'   => $reservationTotal,
             'reservation_paid'    => $reservationPaid,
-            'reservation_balance' => max(0, round($reservationTotal - $reservationPaid, 2)),
+            'reservation_balance' => $reservationBalance,
             'service_total'       => $serviceTotal,
             'service_paid'        => $servicePaid,
-            'service_balance'     => max(0, round($serviceTotal - $servicePaid, 2)),
+            'service_balance'     => $serviceBalance,
             'open'           => $open,
             'downpayment_due' => ($open && $reservationPaid <= 0)
                 ? $this->depositFor($reservationTotal)
