@@ -93,19 +93,11 @@ class CustomerServicesController extends Controller
             $this->api->respond_error('Reservation not found.', 404);
         }
 
-        $rows  = $this->requests->forReservation((int) $id);
-        $total = 0.0;
-
-        foreach ($rows as $r) {
-            if ($r['status'] !== 'cancelled') {
-                $total += (float) $r['total_amount'];
-            }
-        }
+        $rows = $this->requests->forReservation((int) $id);
 
         $this->api->respond([
             'success'                  => true,
             'open'                     => $this->isOpenStay($reservation),
-            'total'                    => round($total, 2),
             'data'                     => array_map([$this, 'shapeRequest'], $rows),
         ]);
     }
@@ -281,7 +273,7 @@ class CustomerServicesController extends Controller
 
         $this->api->respond([
             'success' => true,
-            'message' => 'Request sent. The hotel will confirm it, and the charge is added to your bill.',
+            'message' => 'Request sent. The hotel will confirm it. Payment is separate from your stay balance.',
             'data'    => $this->shapeRequest($row),
         ], 201);
     }

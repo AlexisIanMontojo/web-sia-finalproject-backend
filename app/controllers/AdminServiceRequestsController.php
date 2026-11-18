@@ -94,8 +94,8 @@ class AdminServiceRequestsController extends Controller
         $this->api->require_method('POST');
         $row = $this->findOr404($id);
 
-        if ($row['status'] !== 'completed') {
-            $this->api->respond_error('Only completed services can be billed.', 409);
+        if ($row['status'] === 'cancelled') {
+            $this->api->respond_error('Cancelled service requests cannot be marked paid.', 409);
         }
 
         if ($row['billing_status'] === 'paid') {
@@ -114,6 +114,6 @@ class AdminServiceRequestsController extends Controller
             $this->api->respond_error('Could not confirm the cash payment. Try again.', 500);
         }
 
-        $this->api->respond(['success' => true, 'message' => 'Cash payment confirmed.']);
+        $this->api->respond(['success' => true, 'message' => 'Service marked paid after cash was received.']);
     }
 }
